@@ -4,22 +4,59 @@ import asyncio
 import httpx
 import urllib.parse
 import logging
+from sqlalchemy import select, insert, update
 from config import settings
+from db import SessionLocal, Counter
 
 log = logging.getLogger("verifier")
 
 REOON_IPS = [s.strip() for s in settings.REOON_IPS.split(",") if s.strip()]
 REOON_HOST = "emailverifier.reoon.com"
 
-# In-memory counter for Reoon verifier calls (resets on process restart).
-# Reoon doesn't expose a remaining-credit endpoint, so this tracks usage since this deploy.
+# Persistent counter for Reoon verifier calls.
+# Reoon doesn't expose a remaining-credit endpoint, so this tracks our usage over time
+# (survives redeploys via the SQLite counters table).
 CALLS_MADE = 0
+_counter_loaded = False
+_counter_lock = asyncio.Lock()
+
+
+async def _load_counter():
+    """Load persisted counter from DB on first use."""
+    global CALLS_MADE, _counter_loaded
+    if _counter_loaded:
+        return
+    async with _counter_lock:
+        if _counter_loaded:
+            return
+        async with SessionLocal() as s:
+            row = (await s.execute(select(Counter).where(Counter.key == "reoon_calls"))).scalar_one_or_none()
+            CALLS_MADE = row.value if row else 0
+            _counter_loaded = True
+
+
+async def _persist_counter():
+    """Write current CALLS_MADE to DB. Best-effort, ignores errors."""
+    try:
+        async with SessionLocal() as s:
+            existing = (await s.execute(select(Counter).where(Counter.key == "reoon_calls"))).scalar_one_or_none()
+            if existing:
+                await s.execute(update(Counter).where(Counter.key == "reoon_calls").values(value=CALLS_MADE))
+            else:
+                await s.execute(insert(Counter).values(key="reoon_calls", value=CALLS_MADE))
+            await s.commit()
+    except Exception:
+        pass
 
 
 async def verify_email(email: str, retries: int = 3) -> dict | None:
     """Returns Reoon power response or None."""
     global CALLS_MADE
+    await _load_counter()
     CALLS_MADE += 1
+    # Persist every 10 calls (avoids excessive DB writes)
+    if CALLS_MADE % 10 == 0:
+        await _persist_counter()
     qs = urllib.parse.urlencode({"email": email, "key": settings.REOON_API_KEY, "mode": "power"})
     url = f"{settings.REOON_BASE_URL}/api/v1/verify?{qs}"
     for attempt in range(retries):

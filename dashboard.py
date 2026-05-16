@@ -296,7 +296,7 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   </div>
   <div class="stat-card">
     <div class="stat-num">{REOON_CALLS:,}</div>
-    <div class="stat-label">Reoon Calls (this run)</div>
+    <div class="stat-label">Reoon Verifier Calls</div>
   </div>
 </div>
 

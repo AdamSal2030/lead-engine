@@ -118,6 +118,9 @@ async def cleanup_zombie_batches():
 async def lifespan(app: FastAPI):
     global _perpetual_task
     await init_db()
+    # Load persistent Reoon call counter so dashboard shows correct total before any new calls
+    from pipeline.verifier import _load_counter
+    await _load_counter()
     await cleanup_zombie_batches()
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())

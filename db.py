@@ -53,6 +53,13 @@ class VerifiedLead(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Counter(Base):
+    """Tiny key/value table for persistent counters (e.g. Reoon API calls)."""
+    __tablename__ = "counters"
+    key = Column(String(50), primary_key=True)
+    value = Column(Integer, default=0, nullable=False)
+
+
 class Batch(Base):
     __tablename__ = "batches"
     id = Column(Integer, primary_key=True)
