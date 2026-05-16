@@ -43,7 +43,7 @@ VOYAGE_SITES = [
     "voyageaustin.com", "voyagechicago.com", "voyageohio.com", "voyageminnesota.com",
     "voyageutah.com", "voyagebaltimore.com", "voyagecharlotte.com",
     "voyagevirginia.com", "voyagewisconsin.com", "voyagewashington.com",
-    "voyagealabama.com",
+    "voyagealabama.com", "voyagemichigan.com",
 ]
 
 
