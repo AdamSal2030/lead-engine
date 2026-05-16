@@ -272,6 +272,15 @@ async def debug():
             for b in recent
         ]
 
+    # 3b. Seen-URL status breakdown
+    try:
+        async with SessionLocal() as s:
+            from sqlalchemy import text as sql_text
+            r = await s.execute(sql_text("SELECT status, COUNT(*) FROM seen_urls GROUP BY status"))
+            diag["seen_status"] = {row[0]: row[1] for row in r.all()}
+    except Exception as e:
+        diag["seen_status_err"] = str(e)[:100]
+
     # 4. Skrapp state
     try:
         from pipeline.finder import get_state as skrapp_state, _load_counter as _sk_load
