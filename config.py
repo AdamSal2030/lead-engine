@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # API auth (optional — protects /run endpoint)
     API_TOKEN: str = ""
 
+    # Dashboard auth (HTTP Basic — protects /, /download, /leads/recent)
+    DASH_USERNAME: str = ""
+    DASH_PASSWORD: str = ""
+
     # Public URL (Railway sets RAILWAY_PUBLIC_DOMAIN automatically)
     PUBLIC_BASE_URL: str = ""
 

@@ -5,8 +5,10 @@ import logging
 import os
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
+import secrets
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc, func
 
 from config import settings
@@ -96,7 +98,30 @@ def check_auth(authorization: str | None):
         raise HTTPException(401, "Unauthorized")
 
 
-@app.get("/", response_class=HTMLResponse)
+from typing import Optional
+_basic = HTTPBasic(auto_error=False)
+
+def require_dash_login(creds: Optional[HTTPBasicCredentials] = Depends(_basic)):
+    """HTTP Basic Auth for browser-facing endpoints. If env unset, all open."""
+    if not settings.DASH_USERNAME or not settings.DASH_PASSWORD:
+        return  # auth not configured → open access
+    if not creds:
+        raise HTTPException(
+            status_code=401,
+            detail="Auth required",
+            headers={"WWW-Authenticate": 'Basic realm="Lead Engine"'},
+        )
+    user_ok = secrets.compare_digest(creds.username, settings.DASH_USERNAME)
+    pass_ok = secrets.compare_digest(creds.password, settings.DASH_PASSWORD)
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="Wrong credentials",
+            headers={"WWW-Authenticate": 'Basic realm="Lead Engine"'},
+        )
+
+
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_dash_login)])
 async def root():
     html = await render_dashboard(
         loop_state=_loop_state,
@@ -107,7 +132,7 @@ async def root():
     return HTMLResponse(content=html)
 
 
-@app.get("/api")
+@app.get("/api", dependencies=[Depends(require_dash_login)])
 async def api_root():
     """JSON endpoint (same data as the HTML dashboard, for scripts)."""
     return {
@@ -149,7 +174,7 @@ async def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_dash_login)])
 async def status():
     async with SessionLocal() as s:
         total_verified = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
@@ -191,7 +216,7 @@ async def trigger_run(
     return {"ok": True, "msg": f"Batch started, target={target}. Check /status for progress."}
 
 
-@app.get("/download/{filename}")
+@app.get("/download/{filename}", dependencies=[Depends(require_dash_login)])
 async def download(filename: str):
     """Open: filenames are unguessable (batch_id + timestamp), no auth required."""
     safe = os.path.basename(filename)
@@ -201,7 +226,7 @@ async def download(filename: str):
     return FileResponse(path, filename=safe, media_type="text/csv")
 
 
-@app.get("/leads/recent")
+@app.get("/leads/recent", dependencies=[Depends(require_dash_login)])
 async def recent_leads(limit: int = 50):
     async with SessionLocal() as s:
         result = await s.execute(
