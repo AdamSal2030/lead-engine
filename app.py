@@ -184,6 +184,17 @@ async def resume(authorization: str = Header(None)):
     return {"ok": True, "msg": "Resumed. Next batch will start within 60s."}
 
 
+@app.post("/retry-stuck")
+async def retry_stuck(authorization: str = Header(None)):
+    """Clear URLs marked as 'no_emails' / 'no_parse' / 'error' so they get retried.
+    Use this when the source pool is exhausted but you suspect many URLs failed due to
+    transient issues (network, blocked sitemaps, etc.) and could yield leads now."""
+    check_auth(authorization)
+    from pipeline.orchestrator import clear_stuck_seen
+    cleared = await clear_stuck_seen()
+    return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} stuck URLs. They'll be reprocessed in the next batch iteration."}
+
+
 @app.get("/health")
 async def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}

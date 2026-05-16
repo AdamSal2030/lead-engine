@@ -29,11 +29,19 @@ async def is_running() -> bool:
     return _run_lock.locked()
 
 
-async def get_unseen_urls(all_by_source: dict[str, list[str]]) -> list[tuple[str, str]]:
-    """Filter out URLs we've already processed."""
+async def get_unseen_urls(all_by_source: dict[str, list[str]],
+                           retry_stuck: bool = False) -> list[tuple[str, str]]:
+    """Filter out URLs we've already processed.
+    If retry_stuck=True, also include URLs marked 'no_emails' or 'no_parse' or 'error'
+    (gives them another shot in case parser/network improved)."""
     async with SessionLocal() as s:
-        result = await s.execute(select(SeenURL.url))
+        if retry_stuck:
+            # Only treat 'parsed' (successful) URLs as truly seen
+            result = await s.execute(select(SeenURL.url).where(SeenURL.status == "parsed"))
+        else:
+            result = await s.execute(select(SeenURL.url))
         seen = {row[0] for row in result.all()}
+
     out = []
     for source, urls in all_by_source.items():
         for u in urls:
@@ -41,6 +49,18 @@ async def get_unseen_urls(all_by_source: dict[str, list[str]]) -> list[tuple[str
                 out.append((u, source))
     random.shuffle(out)
     return out
+
+
+async def clear_stuck_seen() -> int:
+    """Remove SeenURL rows marked as 'no_emails', 'no_parse', or 'error' so they get retried.
+    Returns count of cleared rows."""
+    from sqlalchemy import delete
+    async with SessionLocal() as s:
+        result = await s.execute(
+            delete(SeenURL).where(SeenURL.status.in_(["no_emails", "no_parse", "error"]))
+        )
+        await s.commit()
+        return result.rowcount
 
 
 async def mark_seen(url: str, source: str, status: str):
@@ -191,16 +211,25 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                 log.info(f"  outer iter {wait_iterations + 1}: {len(unseen)} unseen URLs available")
 
                 if not unseen:
-                    if settings.PARTIAL_BATCHES:
-                        log.info("Pool exhausted and PARTIAL_BATCHES=True. Finishing with what we have.")
-                        break
-                    # Wait for new content
-                    wait_iterations += 1
-                    log.info(f"Sources exhausted. Waiting {settings.RETRY_SITEMAP_SECONDS}s for new posts. "
-                             f"verified={verified_count}/{target}")
-                    _current_batch["status_msg"] = f"Waiting for new URLs (iter {wait_iterations})"
-                    await asyncio.sleep(settings.RETRY_SITEMAP_SECONDS)
-                    continue
+                    # Try retrying URLs that previously failed (no_emails / no_parse / error)
+                    # — gives them another chance with our updated parser + UAs
+                    if wait_iterations == 0:
+                        log.info("Pool exhausted on first pass. Clearing stuck-seen URLs to retry them...")
+                        cleared = await clear_stuck_seen()
+                        log.info(f"  cleared {cleared} stuck URLs for retry")
+                        unseen = await get_unseen_urls(all_urls)
+                        log.info(f"  now {len(unseen)} unseen URLs after clearing stuck ones")
+
+                    if not unseen:
+                        if settings.PARTIAL_BATCHES:
+                            log.info("Pool exhausted and PARTIAL_BATCHES=True. Finishing.")
+                            break
+                        wait_iterations += 1
+                        log.info(f"Sources exhausted. Waiting {settings.RETRY_SITEMAP_SECONDS}s. "
+                                 f"verified={verified_count}/{target}")
+                        _current_batch["status_msg"] = f"Waiting for new URLs (iter {wait_iterations})"
+                        await asyncio.sleep(settings.RETRY_SITEMAP_SECONDS)
+                        continue
 
                 # 2. Process this chunk
                 scrape_tasks = []

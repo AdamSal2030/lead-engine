@@ -9,20 +9,32 @@ log = logging.getLogger("sources")
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 HEADERS = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9"}
 
+# Fallback UAs for sites that block Railway datacenter IPs (Cloudflare etc.)
+UA_FALLBACKS = [
+    UA,  # default Chrome on Mac
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+]
 
-async def fetch(url: str, timeout: int = 20) -> str | None:
-    try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as cli:
-            r = await cli.get(url)
-            if r.status_code == 200:
-                return r.text
-    except Exception as e:
-        log.debug(f"fetch fail {url}: {e}")
+
+async def fetch(url: str, timeout: int = 20, try_fallbacks: bool = False) -> str | None:
+    uas = UA_FALLBACKS if try_fallbacks else [UA]
+    for ua in uas:
+        try:
+            headers = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
+            async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True) as cli:
+                r = await cli.get(url)
+                if r.status_code == 200 and len(r.text) > 50:
+                    return r.text
+        except Exception as e:
+            log.debug(f"fetch fail {url} (ua={ua[:30]}): {e}")
+            continue
     return None
 
 
 async def canvasrebel_urls() -> list[str]:
-    text = await fetch("https://canvasrebel.com/post-sitemap.xml")
+    text = await fetch("https://canvasrebel.com/post-sitemap.xml", try_fallbacks=True)
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
@@ -30,7 +42,7 @@ async def canvasrebel_urls() -> list[str]:
 
 
 async def boldjourney_urls() -> list[str]:
-    text = await fetch("https://boldjourney.com/news-sitemap.xml")
+    text = await fetch("https://boldjourney.com/news-sitemap.xml", try_fallbacks=True)
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
@@ -73,7 +85,7 @@ VOYAGE_SITES = [
 
 
 async def voyage_urls(site: str) -> list[str]:
-    text = await fetch(f"https://{site}/post-sitemap.xml")
+    text = await fetch(f"https://{site}/post-sitemap.xml", try_fallbacks=True)
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
@@ -86,7 +98,7 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
     Used for CEO Weekly, Famous Times, etc."""
     all_urls = []
     for n in range(1, max_pages + 1):
-        text = await fetch(f"https://{site}/post-sitemap{n}.xml")
+        text = await fetch(f"https://{site}/post-sitemap{n}.xml", try_fallbacks=True)
         if not text:
             break
         urls = re.findall(r"<loc>([^<]+)</loc>", text)
