@@ -33,8 +33,19 @@ async def fetch(url: str, timeout: int = 20, try_fallbacks: bool = False) -> str
     return None
 
 
+async def fetch_via_wayback(url: str, timeout: int = 45) -> str | None:
+    """Last-resort fallback: fetch via Wayback Machine archive."""
+    wb = f"https://web.archive.org/web/2026/{url}"
+    return await fetch(wb, timeout=timeout, try_fallbacks=True)
+
+
 async def canvasrebel_urls() -> list[str]:
+    # Direct first; if blocked (Cloudflare on Railway IPs), fall back to Wayback Machine archive
     text = await fetch("https://canvasrebel.com/post-sitemap.xml", try_fallbacks=True)
+    if not text:
+        log.info("CanvasRebel direct sitemap blocked, falling back to Wayback Machine")
+        text = await fetch("https://web.archive.org/web/2026/https://canvasrebel.com/post-sitemap.xml",
+                           try_fallbacks=True, timeout=45)
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
@@ -43,6 +54,10 @@ async def canvasrebel_urls() -> list[str]:
 
 async def boldjourney_urls() -> list[str]:
     text = await fetch("https://boldjourney.com/news-sitemap.xml", try_fallbacks=True)
+    if not text:
+        log.info("BoldJourney direct sitemap blocked, falling back to Wayback Machine")
+        text = await fetch("https://web.archive.org/web/2026/https://boldjourney.com/news-sitemap.xml",
+                           try_fallbacks=True, timeout=45)
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
