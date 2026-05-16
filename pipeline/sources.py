@@ -37,6 +37,19 @@ async def boldjourney_urls() -> list[str]:
     return [u for u in urls if re.match(r"https://boldjourney\.com/meet-[^/]+/?$", u)]
 
 
+async def valiantceo_urls() -> list[str]:
+    """ValiantCEO has founder interview articles. URL pattern: /firstname-lastname-headline/"""
+    text = await fetch("https://valiantceo.com/post-sitemap.xml")
+    if not text:
+        return []
+    urls = re.findall(r"<loc>([^<]+)</loc>", text)
+    # Keep only article-looking URLs (4+ hyphens in slug, no /category/, /tag/, /author/)
+    return [u for u in urls
+            if re.match(r"https://valiantceo\.com/[a-z0-9\-]+/?$", u)
+            and u.rstrip("/").split("/")[-1].count("-") >= 4
+            and not any(x in u for x in ["/category/", "/tag/", "/author/", "/page/"])]
+
+
 VOYAGE_SITES = [
     "voyagela.com", "voyageatl.com", "voyagemia.com", "voyagedallas.com",
     "voyagehouston.com", "voyageraleigh.com", "voyagestl.com", "voyagekc.com",
@@ -83,6 +96,7 @@ async def collect_all_urls() -> dict[str, list[str]]:
     out = {}
     out["canvasrebel"] = await canvasrebel_urls()
     out["boldjourney"] = await boldjourney_urls()
+    out["valiantceo"] = await valiantceo_urls()
     for site in VOYAGE_SITES:
         out[site.replace(".com", "")] = await voyage_urls(site)
     for site in PR_SITES:
@@ -98,6 +112,7 @@ def source_label(url: str) -> str:
     if "ceoweekly" in url: return "CEOWeekly"
     if "famoustimes" in url: return "FamousTimes"
     if "disruptmagazine" in url: return "DisruptMagazine"
+    if "valiantceo" in url: return "ValiantCEO"
     for s in VOYAGE_SITES:
         if s in url:
             return s.replace(".com", "").replace("voyage", "Voyage").title()
