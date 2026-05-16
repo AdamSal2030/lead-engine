@@ -37,6 +37,18 @@ async def boldjourney_urls() -> list[str]:
     return [u for u in urls if re.match(r"https://boldjourney\.com/meet-[^/]+/?$", u)]
 
 
+async def founderhour_urls() -> list[str]:
+    """TheFounderHour has founder interview articles on their blog."""
+    text = await fetch("https://www.thefounderhour.com/sitemap.xml")
+    if not text:
+        return []
+    urls = re.findall(r"<loc>([^<]+)</loc>", text)
+    return [u for u in urls
+            if "/blog/" in u
+            and u.rstrip("/").split("/")[-1].count("-") >= 4
+            and not any(x in u for x in ["/category/", "/tag/", "/page/"])]
+
+
 async def valiantceo_urls() -> list[str]:
     """ValiantCEO has founder interview articles. URL pattern: /firstname-lastname-headline/"""
     text = await fetch("https://valiantceo.com/post-sitemap.xml")
@@ -88,7 +100,8 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
     return all_urls
 
 
-PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com"]
+PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com",
+            "americanentrepreneurship.com"]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
@@ -97,6 +110,7 @@ async def collect_all_urls() -> dict[str, list[str]]:
     out["canvasrebel"] = await canvasrebel_urls()
     out["boldjourney"] = await boldjourney_urls()
     out["valiantceo"] = await valiantceo_urls()
+    out["founderhour"] = await founderhour_urls()
     for site in VOYAGE_SITES:
         out[site.replace(".com", "")] = await voyage_urls(site)
     for site in PR_SITES:
@@ -114,6 +128,8 @@ def source_label(url: str) -> str:
     if "disruptmagazine" in url: return "DisruptMagazine"
     if "valiantceo" in url: return "ValiantCEO"
     if "ceomonthly" in url: return "CEOMonthly"
+    if "thefounderhour" in url: return "TheFounderHour"
+    if "americanentrepreneurship" in url: return "AmericanEntrepreneurship"
     for s in VOYAGE_SITES:
         if s in url:
             return s.replace(".com", "").replace("voyage", "Voyage").title()
