@@ -161,9 +161,8 @@ async def trigger_run(
 
 
 @app.get("/download/{filename}")
-async def download(filename: str, authorization: str = Header(None)):
-    check_auth(authorization)
-    # only allow filenames inside DATA_DIR
+async def download(filename: str):
+    """Open: filenames are unguessable (batch_id + timestamp), no auth required."""
     safe = os.path.basename(filename)
     path = os.path.join(settings.DATA_DIR, safe)
     if not os.path.exists(path):
@@ -172,8 +171,7 @@ async def download(filename: str, authorization: str = Header(None)):
 
 
 @app.get("/leads/recent")
-async def recent_leads(limit: int = 50, authorization: str = Header(None)):
-    check_auth(authorization)
+async def recent_leads(limit: int = 50):
     async with SessionLocal() as s:
         result = await s.execute(
             select(VerifiedLead).order_by(desc(VerifiedLead.id)).limit(limit)

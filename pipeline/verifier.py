@@ -63,8 +63,8 @@ async def verify_lead(lead: dict) -> dict | None:
         score = res.get("overall_score") or 0
         catch = res.get("is_catch_all")
 
-        # Strict Tier A only: real mailbox confirmed via SMTP, no role accounts, no catch-all
-        if status in ("safe", "valid") and not catch and score >= 75:
+        # Tier A: SMTP-confirmed deliverable, NOT catch-all (catch-all bounces in practice)
+        if status in ("safe", "valid") and not catch:
             return {
                 **lead,
                 "verified_email": email,
