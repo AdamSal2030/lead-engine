@@ -23,11 +23,13 @@ class Settings(BaseSettings):
 
     # Perpetual loop — keeps running forever, one batch after another
     PERPETUAL_ENABLED: bool = True
-    BATCH_SIZE: int = 500          # fresh Tier A leads per auto batch (smaller = more frequent CSVs)
+    BATCH_SIZE: int = 500            # starting target — auto-grows from here
+    BATCH_SIZE_MAX: int = 3000       # ceiling
+    BATCH_SIZE_GROWTH: int = 250     # +N each successful batch (until cap)
     BETWEEN_BATCH_SECONDS: int = 30
-    EXHAUSTED_RETRY_SECONDS: int = 3600  # when sources run dry, retry hourly (sitemaps may add new posts)
+    EXHAUSTED_RETRY_SECONDS: int = 3600
 
-    # Backwards-compat (kept so existing env vars still work)
+    # Backwards-compat
     DEFAULT_TARGET: int = 500
     MAX_VERIFY_CONCURRENCY: int = 3
     SCRAPE_CONCURRENCY: int = 6

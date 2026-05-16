@@ -25,20 +25,33 @@ log = logging.getLogger("app")
 _perpetual_task: asyncio.Task | None = None
 _perpetual_paused = False
 _last_exhausted_notice: datetime | None = None
+_loop_state = {"current_target": 0, "completed_batches": 0}
 
 
 async def perpetual_loop():
-    """Run batch after batch, forever. Sleep briefly between, longer when sources dry."""
+    """Run batch after batch, forever. Target ramps up as batches succeed."""
     global _last_exhausted_notice
     log.info("=== PERPETUAL LOOP STARTED — running until manually stopped ===")
+    current_target = settings.BATCH_SIZE
+    _loop_state["current_target"] = current_target
     while True:
         if _perpetual_paused:
             await asyncio.sleep(60)
             continue
         try:
-            result = await run_batch(target=settings.BATCH_SIZE, trigger="auto")
+            log.info(f"--- Starting batch with target={current_target} (max={settings.BATCH_SIZE_MAX}) ---")
+            result = await run_batch(target=current_target, trigger="auto")
             verified = result.get("verified", 0) or 0
             log.info(f"Auto batch finished: verified={verified}, ok={result.get('ok')}, msg={result.get('msg', '')[:100]}")
+            _loop_state["completed_batches"] += 1
+
+            # Grow next target on any successful (non-exhausted) batch
+            if verified > 0 and current_target < settings.BATCH_SIZE_MAX:
+                new_target = min(current_target + settings.BATCH_SIZE_GROWTH, settings.BATCH_SIZE_MAX)
+                if new_target != current_target:
+                    log.info(f"  next batch target ramped: {current_target} → {new_target}")
+                    current_target = new_target
+                    _loop_state["current_target"] = current_target
 
             # Detect exhaustion (no unseen URLs)
             if verified == 0 and "No unseen URLs" in (result.get("msg") or ""):
@@ -90,7 +103,12 @@ async def root():
         "perpetual_paused": _perpetual_paused,
         "currently_running_batch": await is_running(),
         "current_batch": await get_current_status(),
-        "batch_size": settings.BATCH_SIZE,
+        "ramp": {
+            "current_target": _loop_state["current_target"],
+            "max_target": settings.BATCH_SIZE_MAX,
+            "growth_per_batch": settings.BATCH_SIZE_GROWTH,
+            "completed_batches": _loop_state["completed_batches"],
+        },
         "between_batch_seconds": settings.BETWEEN_BATCH_SECONDS,
     }
 
