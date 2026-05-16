@@ -272,7 +272,15 @@ async def debug():
             for b in recent
         ]
 
-    # 4. Current loop state
+    # 4. Skrapp state
+    try:
+        from pipeline.finder import get_state as skrapp_state, _load_counter as _sk_load
+        await _sk_load()
+        diag["skrapp"] = skrapp_state()
+    except Exception as e:
+        diag["skrapp"] = {"error": str(e)[:200]}
+
+    # 5. Current loop state
     diag["loop"] = {
         "paused": _perpetual_paused,
         "current_target": _loop_state.get("current_target"),
