@@ -26,19 +26,19 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 500            # starting target — auto-grows from here
     BATCH_SIZE_MAX: int = 3000       # ceiling
     BATCH_SIZE_GROWTH: int = 250     # +N each successful batch (until cap)
-    BETWEEN_BATCH_SECONDS: int = 30
-    EXHAUSTED_RETRY_SECONDS: int = 3600
+    BETWEEN_BATCH_SECONDS: int = 10
+    EXHAUSTED_RETRY_SECONDS: int = 1800  # 30 min instead of 1 hour
 
     # Batch persistence — keep running until target hit
     PARTIAL_BATCHES: bool = False    # False = wait for new URLs; True = finish at pool exhaustion
     BATCH_MAX_HOURS: int = 72        # safety net: deliver partial after this much wall-time
-    RETRY_SITEMAP_SECONDS: int = 3600  # if pool dries mid-batch, refetch sitemaps after this
+    RETRY_SITEMAP_SECONDS: int = 1800  # if pool dries mid-batch, refetch sitemaps after this
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500
     MAX_VERIFY_CONCURRENCY: int = 3      # leave at 3 — pushing higher trips Reoon rate limits
-    SCRAPE_CONCURRENCY: int = 12         # scrape parallelism (different hosts, safe to bump)
-    EMAIL_FIND_CONCURRENCY: int = 4      # parallel page fetches per founder website
+    SCRAPE_CONCURRENCY: int = 20         # scrape parallelism (different hosts, safe to bump)
+    EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"

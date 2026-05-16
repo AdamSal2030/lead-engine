@@ -24,9 +24,19 @@ def status_badge(status: str) -> str:
         "running": "#f59e0b",      # amber
         "completed": "#10b981",    # green
         "failed": "#ef4444",       # red
+        "interrupted": "#9ca3af",  # gray
     }
     color = colors.get(status, "#6b7280")
     return f'<span class="badge" style="background:{color}">{status}</span>'
+
+
+# Wikipedia Commons public photos
+SYDNEY_PICS = [
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Sydney_Sweeney_by_Gage_Skidmore.jpg/512px-Sydney_Sweeney_by_Gage_Skidmore.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/Sydney_Sweeney_at_2018_Miss_Bala_Premiere.jpg/512px-Sydney_Sweeney_at_2018_Miss_Bala_Premiere.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Sydney_Sweeney_2024.jpg/512px-Sydney_Sweeney_2024.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Sydney_Sweeney_in_2024.jpg/512px-Sydney_Sweeney_in_2024.jpg",
+]
 
 
 async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_batch: dict | None, is_running_now: bool) -> str:
@@ -112,6 +122,10 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     else:
         loop_pill = '<span class="pill pill-idle">Idle (between batches)</span>'
 
+    # Sydney panel — picks one image based on minute so it rotates on each auto-refresh
+    sydney_idx = (datetime.utcnow().minute // 5) % len(SYDNEY_PICS)
+    sydney_url = SYDNEY_PICS[sydney_idx]
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -165,6 +179,22 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   .dl-link:hover {{ text-decoration: underline; }}
   a {{ color: #4b5563; }}
   .auto-refresh {{ font-size: 11px; color: #9ca3af; margin-top: 24px; text-align: center; }}
+  .sydney-panel {{
+    margin-top: 24px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }}
+  .sydney-panel img {{
+    width: 120px; height: 120px; border-radius: 10px; object-fit: cover;
+    border: 2px solid #f3f4f6;
+  }}
+  .sydney-quote {{ font-style: italic; color: #4b5563; font-size: 14px; line-height: 1.5; }}
+  .sydney-name {{ font-weight: 600; margin-top: 8px; font-size: 13px; color: #1b2440; }}
 </style>
 </head>
 <body>
@@ -215,6 +245,14 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     {leads_table}
   </tbody>
 </table>
+
+<div class="sydney-panel">
+  <img src="{sydney_url}" alt="Motivation" loading="lazy" onerror="this.style.display='none'">
+  <div>
+    <div class="sydney-quote">"The engine never sleeps. Neither should your pipeline."</div>
+    <div class="sydney-name">— Sydney, probably</div>
+  </div>
+</div>
 
 <div class="auto-refresh">Auto-refreshes every 20 seconds · Last updated: {datetime.utcnow().strftime("%H:%M:%S")} UTC</div>
 

@@ -76,10 +76,25 @@ async def perpetual_loop():
             await asyncio.sleep(60)
 
 
+async def cleanup_zombie_batches():
+    """On startup, mark any 'running' batches as 'interrupted' — they were orphaned by previous redeploys."""
+    from sqlalchemy import update as sql_update
+    async with SessionLocal() as s:
+        result = await s.execute(sql_update(Batch).where(Batch.status == "running").values(
+            status="interrupted",
+            finished_at=datetime.utcnow(),
+            notes="orphaned by redeploy",
+        ))
+        await s.commit()
+        if result.rowcount:
+            log.info(f"Marked {result.rowcount} orphaned batch(es) as 'interrupted'.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _perpetual_task
     await init_db()
+    await cleanup_zombie_batches()
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
         log.info("Perpetual loop scheduled.")
