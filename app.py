@@ -77,8 +77,11 @@ async def perpetual_loop():
 
 
 async def cleanup_zombie_batches():
-    """On startup, mark any 'running' batches as 'interrupted' — they were orphaned by previous redeploys."""
+    """On startup: mark orphaned 'running' batches as 'interrupted' AND regenerate CSVs
+    for any batch (interrupted or completed) that has leads but no CSV recorded."""
     from sqlalchemy import update as sql_update
+    from pipeline.delivery import regenerate_csv_for_batch
+
     async with SessionLocal() as s:
         result = await s.execute(sql_update(Batch).where(Batch.status == "running").values(
             status="interrupted",
@@ -88,6 +91,27 @@ async def cleanup_zombie_batches():
         await s.commit()
         if result.rowcount:
             log.info(f"Marked {result.rowcount} orphaned batch(es) as 'interrupted'.")
+
+        # Find batches that have verified leads but no csv_path (interrupted before delivery)
+        leads_by_batch_q = (
+            "SELECT batch_id, COUNT(*) FROM verified_leads "
+            "WHERE batch_id IN (SELECT id FROM batches WHERE csv_path IS NULL OR csv_path = '') "
+            "GROUP BY batch_id"
+        )
+        from sqlalchemy import text
+        result = await s.execute(text(leads_by_batch_q))
+        rows = result.all()
+
+    regenerated = 0
+    for batch_id, count in rows:
+        if count > 0:
+            try:
+                await regenerate_csv_for_batch(batch_id)
+                regenerated += 1
+            except Exception as e:
+                log.warning(f"Couldn't regen CSV for batch {batch_id}: {e}")
+    if regenerated:
+        log.info(f"Regenerated CSVs for {regenerated} batch(es) with orphaned leads.")
 
 
 @asynccontextmanager
@@ -294,6 +318,14 @@ async def trigger_run(
 
     background_tasks.add_task(runner)
     return {"ok": True, "msg": f"Batch started, target={target}. Check /status for progress."}
+
+
+@app.get("/download-all.csv", dependencies=[Depends(require_dash_login)])
+async def download_all():
+    """Download EVERY verified Tier-A lead ever, in one CSV."""
+    from pipeline.delivery import deliver_all_leads_csv
+    path = await deliver_all_leads_csv()
+    return FileResponse(path, filename=os.path.basename(path), media_type="text/csv")
 
 
 @app.get("/download/{filename}", dependencies=[Depends(require_dash_login)])

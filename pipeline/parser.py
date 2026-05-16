@@ -58,8 +58,27 @@ UA_LIST = [
 ]
 
 
+CLOUDFLARE_BLOCKED_HOSTS = ("canvasrebel.com", "boldjourney.com")
+
+
 async def fetch(url: str, timeout: int = 15) -> str | None:
-    """Try multiple UAs; if all fail and the host is known Cloudflare-blocked, try Wayback."""
+    """Try multiple UAs. For known Cloudflare-blocked hosts, go directly to Wayback (skip the doomed direct attempts)."""
+    # Fast path: known-blocked → Wayback only
+    if any(h in url for h in CLOUDFLARE_BLOCKED_HOSTS):
+        try:
+            wb_url = f"https://web.archive.org/web/2026/{url}"
+            async with httpx.AsyncClient(
+                headers={"User-Agent": UA_LIST[0]},
+                timeout=30, follow_redirects=True,
+            ) as cli:
+                r = await cli.get(wb_url)
+                if r.status_code == 200 and len(r.text) > 200:
+                    return r.text
+        except Exception:
+            pass
+        return None
+
+    # Normal path: try direct fetch with UA rotation
     for ua in UA_LIST:
         try:
             h = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
@@ -69,18 +88,6 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
                     return r.text
         except Exception:
             continue
-
-    # Last resort: try Wayback for known Cloudflare-blocked hosts
-    if any(host in url for host in ("canvasrebel.com", "boldjourney.com")):
-        try:
-            wb_url = f"https://web.archive.org/web/2026/{url}"
-            h = {"User-Agent": UA_LIST[0]}
-            async with httpx.AsyncClient(headers=h, timeout=45, follow_redirects=True) as cli:
-                r = await cli.get(wb_url)
-                if r.status_code == 200 and "text/html" in r.headers.get("content-type", "").lower():
-                    return r.text
-        except Exception:
-            pass
     return None
 
 

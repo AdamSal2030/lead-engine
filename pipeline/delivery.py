@@ -13,6 +13,71 @@ from config import settings
 log = logging.getLogger("delivery")
 
 
+async def deliver_all_leads_csv() -> str:
+    """Write a CSV of ALL verified leads ever — useful for one-shot downloads."""
+    async with SessionLocal() as s:
+        result = await s.execute(select(VerifiedLead).order_by(VerifiedLead.id))
+        leads = result.scalars().all()
+
+    fname = f"all_leads_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    path = os.path.join(settings.DATA_DIR, fname)
+
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Tier","First Name","Last Name","Email","Role","Business",
+                    "Website","Source","Source URL","Reoon Status","Score","Catch-All","Batch","Added"])
+        for l in leads:
+            w.writerow([
+                l.tier, l.first_name or "", l.last_name or "",
+                l.email, l.role or "", l.company or "",
+                l.website or "", l.source or "", l.source_url or "",
+                l.reoon_status or "", l.reoon_score or "",
+                "Yes" if l.is_catch_all else "No",
+                l.batch_id or "",
+                l.created_at.isoformat() if l.created_at else "",
+            ])
+    return path
+
+
+async def regenerate_csv_for_batch(batch_id: int) -> str | None:
+    """Generate a CSV for a specific batch (useful for interrupted batches whose leads are saved but CSV wasn't)."""
+    async with SessionLocal() as s:
+        result = await s.execute(select(VerifiedLead).where(VerifiedLead.batch_id == batch_id))
+        leads = result.scalars().all()
+        if not leads:
+            return None
+        # Also pick up the batch row to set csv_path/delivered_count
+        b = (await s.execute(select(Batch).where(Batch.id == batch_id))).scalar_one_or_none()
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M")
+    fname = f"leads_batch_{batch_id}_{timestamp}.csv"
+    path = os.path.join(settings.DATA_DIR, fname)
+
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["Tier","First Name","Last Name","Email","Role","Business",
+                    "Website","Source","Source URL","Reoon Status","Score","Catch-All"])
+        for l in leads:
+            w.writerow([
+                l.tier, l.first_name or "", l.last_name or "",
+                l.email, l.role or "", l.company or "",
+                l.website or "", l.source or "", l.source_url or "",
+                l.reoon_status or "", l.reoon_score or "",
+                "Yes" if l.is_catch_all else "No",
+            ])
+
+    # Patch the batch row with the new csv_path + delivered_count
+    if b:
+        from sqlalchemy import update as sql_update
+        async with SessionLocal() as s:
+            await s.execute(sql_update(Batch).where(Batch.id == batch_id).values(
+                csv_path=path, delivered_count=len(leads),
+            ))
+            await s.commit()
+
+    return path
+
+
 async def deliver_batch(batch_id: int) -> str:
     """Write CSV for batch, attempt email delivery. Return CSV path."""
     async with SessionLocal() as s:

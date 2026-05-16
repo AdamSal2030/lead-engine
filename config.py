@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500
-    MAX_VERIFY_CONCURRENCY: int = 3      # leave at 3 — pushing higher trips Reoon rate limits
+    MAX_VERIFY_CONCURRENCY: int = 4      # 4 is safe-ish; 5+ trips Reoon rate limits
     SCRAPE_CONCURRENCY: int = 20         # scrape parallelism (different hosts, safe to bump)
     EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
 

@@ -156,6 +156,13 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     border: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
   }}
   .stat-num {{ font-size: 36px; font-weight: 700; line-height: 1.2; }}
+  .dl-all-btn {{
+    display: inline-block; margin-top: 10px; padding: 10px 18px;
+    background: linear-gradient(90deg,#6366f1,#8b5cf6); color: white;
+    border-radius: 8px; text-decoration: none; font-weight: 600;
+    font-size: 14px;
+  }}
+  .dl-all-btn:hover {{ opacity: 0.9; }}
   .stat-label {{ font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
   .current-batch {{
     background: white; padding: 18px; border-radius: 10px;
@@ -225,6 +232,8 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
 </div>
 
 {cb_html}
+
+<div style="margin-top:20px"><a href="{base}/download-all.csv" class="dl-all-btn">⬇ Download ALL {total:,} leads as one CSV</a></div>
 
 <h2>Recent batches</h2>
 <table>
