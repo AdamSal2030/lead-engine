@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""FastAPI app + APScheduler weekly cron."""
+"""FastAPI app + perpetual background lead-finder loop."""
 import asyncio
 import logging
 import os
@@ -7,13 +7,12 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select, desc, func
 
 from config import settings
 from db import init_db, SessionLocal, Batch, VerifiedLead
 from pipeline.orchestrator import run_batch, get_current_status, is_running
+from pipeline.delivery import notify_sources_exhausted
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,27 +21,55 @@ logging.basicConfig(
 )
 log = logging.getLogger("app")
 
-scheduler = AsyncIOScheduler()
+# Perpetual-loop control
+_perpetual_task: asyncio.Task | None = None
+_perpetual_paused = False
+_last_exhausted_notice: datetime | None = None
 
 
-async def cron_job():
-    log.info("Cron trigger: starting scheduled batch")
-    await run_batch(target=settings.DEFAULT_TARGET, trigger="cron")
+async def perpetual_loop():
+    """Run batch after batch, forever. Sleep briefly between, longer when sources dry."""
+    global _last_exhausted_notice
+    log.info("=== PERPETUAL LOOP STARTED — running until manually stopped ===")
+    while True:
+        if _perpetual_paused:
+            await asyncio.sleep(60)
+            continue
+        try:
+            result = await run_batch(target=settings.BATCH_SIZE, trigger="auto")
+            verified = result.get("verified", 0) or 0
+            log.info(f"Auto batch finished: verified={verified}, ok={result.get('ok')}, msg={result.get('msg', '')[:100]}")
+
+            # Detect exhaustion (no unseen URLs)
+            if verified == 0 and "No unseen URLs" in (result.get("msg") or ""):
+                # Notify once per 6 hours max
+                now = datetime.utcnow()
+                if (not _last_exhausted_notice
+                        or (now - _last_exhausted_notice).total_seconds() > 6 * 3600):
+                    try:
+                        await notify_sources_exhausted()
+                        _last_exhausted_notice = now
+                    except Exception:
+                        log.exception("Failed to send exhaustion email")
+                log.info(f"Sources exhausted. Sleeping {settings.EXHAUSTED_RETRY_SECONDS}s before retry.")
+                await asyncio.sleep(settings.EXHAUSTED_RETRY_SECONDS)
+            else:
+                await asyncio.sleep(settings.BETWEEN_BATCH_SECONDS)
+        except Exception:
+            log.exception("Perpetual loop error — sleeping 60s")
+            await asyncio.sleep(60)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _perpetual_task
     await init_db()
-    if settings.CRON_ENABLED:
-        scheduler.add_job(
-            cron_job,
-            CronTrigger(day_of_week=settings.CRON_DAY, hour=settings.CRON_HOUR, minute=0),
-            id="weekly_run", replace_existing=True, max_instances=1,
-        )
-        scheduler.start()
-        log.info(f"Scheduler started — weekly run on {settings.CRON_DAY} @ {settings.CRON_HOUR:02}:00 UTC")
+    if settings.PERPETUAL_ENABLED:
+        _perpetual_task = asyncio.create_task(perpetual_loop())
+        log.info("Perpetual loop scheduled.")
     yield
-    scheduler.shutdown(wait=False)
+    if _perpetual_task and not _perpetual_task.done():
+        _perpetual_task.cancel()
 
 
 app = FastAPI(title="Lead Engine", lifespan=lifespan)
@@ -59,11 +86,31 @@ def check_auth(authorization: str | None):
 async def root():
     return {
         "service": "lead-engine",
-        "running": await is_running(),
+        "mode": "perpetual" if settings.PERPETUAL_ENABLED else "manual-only",
+        "perpetual_paused": _perpetual_paused,
+        "currently_running_batch": await is_running(),
         "current_batch": await get_current_status(),
-        "cron_enabled": settings.CRON_ENABLED,
-        "cron_schedule": f"{settings.CRON_DAY} @ {settings.CRON_HOUR:02}:00 UTC",
+        "batch_size": settings.BATCH_SIZE,
+        "between_batch_seconds": settings.BETWEEN_BATCH_SECONDS,
     }
+
+
+@app.post("/pause")
+async def pause(authorization: str = Header(None)):
+    """Pause the perpetual loop (current batch finishes, no new batches start)."""
+    check_auth(authorization)
+    global _perpetual_paused
+    _perpetual_paused = True
+    return {"ok": True, "msg": "Paused. Resume with POST /resume."}
+
+
+@app.post("/resume")
+async def resume(authorization: str = Header(None)):
+    """Resume the perpetual loop."""
+    check_auth(authorization)
+    global _perpetual_paused
+    _perpetual_paused = False
+    return {"ok": True, "msg": "Resumed. Next batch will start within 60s."}
 
 
 @app.get("/health")

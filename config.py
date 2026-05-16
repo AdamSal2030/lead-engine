@@ -21,13 +21,14 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/leads.db"
     DATA_DIR: str = "./data"
 
-    # Scheduling
-    CRON_ENABLED: bool = True
-    CRON_DAY: str = "mon"  # weekday
-    CRON_HOUR: int = 6     # 06:00 UTC
+    # Perpetual loop — keeps running forever, one batch after another
+    PERPETUAL_ENABLED: bool = True
+    BATCH_SIZE: int = 500          # fresh Tier A leads per auto batch (smaller = more frequent CSVs)
+    BETWEEN_BATCH_SECONDS: int = 30
+    EXHAUSTED_RETRY_SECONDS: int = 3600  # when sources run dry, retry hourly (sitemaps may add new posts)
 
-    # Batch sizing
-    DEFAULT_TARGET: int = 2000   # fresh Tier A leads per scheduled batch
+    # Backwards-compat (kept so existing env vars still work)
+    DEFAULT_TARGET: int = 500
     MAX_VERIFY_CONCURRENCY: int = 3
     SCRAPE_CONCURRENCY: int = 6
 
