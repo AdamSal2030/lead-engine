@@ -157,8 +157,45 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
     return None
 
 
+def _try_parse_segment(seg: str) -> str | None:
+    """Lower-level: try to clean one candidate segment into a real name. Returns name or None."""
+    name = seg
+    # Strip possessive 's, credentials, suffixes
+    name = re.sub(r"[‘’]s\b.*", "", name)
+    name = re.sub(r",\s*(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\b.*",
+                  "", name, flags=re.IGNORECASE)
+    # Strip honorifics
+    name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach|DJ)\s+",
+                  "", name, flags=re.IGNORECASE)
+    # Strip trailing role / title words
+    name = re.sub(r"\s+(Photographer|Designer|Founder|CEO|Owner|Author|Artist|Coach|"
+                  r"Consultant|Entrepreneur|Director|President|Esthetician|Therapist|"
+                  r"novelist|Filmmaker|Chef|Doctor|Lawyer|Realtor|Stylist|Influencer)\s*$",
+                  "", name, flags=re.IGNORECASE)
+    # Cut at " of/from/on/at/with/in "
+    name = re.split(r"\s+(?:of|from|on|at|with|in)\s+", name, flags=re.IGNORECASE)[0].strip()
+
+    # Normalize ALL-CAPS or all-lowercase
+    if name == name.upper() or name == name.lower():
+        name = " ".join(w.capitalize() for w in name.split())
+
+    words = name.split()
+    if not (2 <= len(words) <= 4) or any(c.isdigit() for c in name):
+        return None
+    if not all(re.match(r"^[A-ZÀ-Ý][\w'\-À-ÿ]+$|^[A-Z]\.?$", w, re.UNICODE) for w in words):
+        return None
+    if any(w.lower().rstrip(".") in NON_PERSON for w in words):
+        return None
+    if any(c in name for c in '"”“'):
+        return None
+    for w in words:
+        if len(w) == 1 and w.isupper(): continue
+        if len(w) < 2: return None
+    return name
+
+
 def clean_name(title_text: str) -> str | None:
-    """Strict name extraction. Rejects article titles, business names, lists, etc."""
+    """Strict name extraction. Tries multiple segments when title uses 'Topic: Name' style."""
     if not title_text: return None
     name = title_text
     # Reject guide / list / faq articles outright
@@ -173,50 +210,23 @@ def clean_name(title_text: str) -> str | None:
     # Strip leading interview-style prefixes
     for prefix in ["Meet ", "Inspiring Conversations with ", "Conversations with ",
                    "Life & Work with ", "Hidden Gems: Meet ", "Daily Inspiration: Meet ",
-                   "Exclusive Interview with ", "Interview with "]:
+                   "Exclusive Interview with ", "Interview with ", "Artist of the Day: ",
+                   "Featured Founder: ", "Founder Spotlight: "]:
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
 
-    # Cut at separator | – — :
-    name = re.split(r"\s*[|–—:]\s*", name)[0].strip()
-    # Cut at " of/from/on/at/with/in "
-    name = re.split(r"\s+(?:of|from|on|at|with|in)\s+", name, flags=re.IGNORECASE)[0].strip()
-    # Strip possessive 's, credentials, suffixes
-    name = re.sub(r"[‘’]s\b.*", "", name)
-    name = re.sub(r",\s*(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\b.*",
-                  "", name, flags=re.IGNORECASE)
-    # Strip honorifics
-    name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach|DJ)\s+",
-                  "", name, flags=re.IGNORECASE)
-    # Strip trailing role / title words
-    name = re.sub(r"\s+(Photographer|Designer|Founder|CEO|Owner|Author|Artist|Coach|"
-                  r"Consultant|Entrepreneur|Director|President|Esthetician|Therapist|"
-                  r"novelist|Filmmaker|Chef|Doctor|Lawyer|Realtor|Stylist|Influencer)\s*$",
-                  "", name, flags=re.IGNORECASE)
-
-    # Normalize ALL-CAPS or all-lowercase names to Title Case
-    if name == name.upper() or name == name.lower():
-        name = " ".join(w.capitalize() for w in name.split())
-
-    words = name.split()
-    if not (2 <= len(words) <= 4) or any(c.isdigit() for c in name):
-        return None
-    # Each word: starts with capital, letters (incl unicode/accented) + optional hyphen/apostrophe
-    if not all(re.match(r"^[A-ZÀ-Ý][\w'\-À-ÿ]+$|^[A-Z]\.?$", w, re.UNICODE) for w in words):
-        return None
-    # No name-word can match the title-words blocklist
-    if any(w.lower().rstrip(".") in NON_PERSON for w in words):
-        return None
-    # Reject if all-caps after our normalization attempt failed (unusual)
-    # Reject special punctuation in name
-    if any(c in name for c in '"”“'):
-        return None
-    # Each word at least 2 chars OR a single uppercase letter (initial)
-    for w in words:
-        if len(w) == 1 and w.isupper(): continue  # initial OK
-        if len(w) < 2: return None
-    return name
+    # Try EACH segment of the title (split on |, –, —, :)
+    # First half is typical ("Sarah Smith | Founder of X"), but second half
+    # works for "Topic of the Day: Sam Castillo" patterns.
+    segments = re.split(r"\s*[|–—:]\s*", name)
+    for seg in segments:
+        seg = seg.strip()
+        if not seg: continue
+        result = _try_parse_segment(seg)
+        if result:
+            return result
+    return None
 
 
 def find_website(body, body_text: str, page_url: str) -> str | None:
