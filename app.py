@@ -121,6 +121,8 @@ async def lifespan(app: FastAPI):
     # Load persistent Reoon call counter so dashboard shows correct total before any new calls
     from pipeline.verifier import _load_counter
     await _load_counter()
+    from pipeline.finder import _load_counter as _sk_load
+    await _sk_load()
     await cleanup_zombie_batches()
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())

@@ -32,6 +32,9 @@ def status_badge(status: str) -> str:
 
 async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_batch: dict | None, is_running_now: bool) -> str:
     from pipeline.verifier import CALLS_MADE as REOON_CALLS
+    from pipeline.finder import get_state as skrapp_state, _load_counter as _sk_load
+    await _sk_load()
+    sk = skrapp_state()
     async with SessionLocal() as s:
         total = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
         recent_batches = (await s.execute(select(Batch).order_by(desc(Batch.id)).limit(15))).scalars().all()
@@ -298,6 +301,12 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     <div class="stat-num">{REOON_CALLS:,}</div>
     <div class="stat-label">Reoon Verifier Calls</div>
   </div>
+</div>
+
+<div style="margin-top:14px; font-size:12px; color:#65a08a;">
+  <span style="color:#00ffa8">SKRAPP:</span>
+  {sk['calls']} calls · {sk['hits']} hits ({(100*sk['hits']/sk['calls']) if sk['calls'] else 0:.0f}% success)
+  · {'⚠ QUOTA EXHAUSTED — running free-only' if sk['quota_exhausted'] else ('✓ enabled' if sk['enabled'] else '○ disabled')}
 </div>
 
 <div><a href="{base}/download-all.csv" class="dl-all-btn">⬇ Download all {total:,} leads</a></div>

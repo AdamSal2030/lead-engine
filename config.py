@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     # Required
     REOON_API_KEY: str = ""
 
+    # Skrapp email finder (Layer 4 — fires only when free extraction fails)
+    SKRAPP_API_KEY: str = ""
+    SKRAPP_ENABLED: bool = True  # auto-disables when quota exhausted; restart to retry
+
     # Delivery (one of these is required for email delivery)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
@@ -26,7 +30,7 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 500            # starting target — auto-grows from here
     BATCH_SIZE_MAX: int = 3000       # ceiling
     BATCH_SIZE_GROWTH: int = 250     # +N each successful batch (until cap)
-    BETWEEN_BATCH_SECONDS: int = 10
+    BETWEEN_BATCH_SECONDS: int = 5
     EXHAUSTED_RETRY_SECONDS: int = 1800  # 30 min instead of 1 hour
 
     # Batch persistence — keep running until target hit
@@ -37,8 +41,9 @@ class Settings(BaseSettings):
     # Backwards-compat
     DEFAULT_TARGET: int = 500
     MAX_VERIFY_CONCURRENCY: int = 4      # 4 is safe-ish; 5+ trips Reoon rate limits
-    SCRAPE_CONCURRENCY: int = 20         # scrape parallelism (different hosts, safe to bump)
+    SCRAPE_CONCURRENCY: int = 30         # scrape parallelism (different hosts, safe to bump)
     EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
+    SKRAPP_CONCURRENCY: int = 2          # parallel Skrapp calls — keep low to avoid 429
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"

@@ -83,19 +83,12 @@ async def verify_email(email: str, retries: int = 3) -> dict | None:
 
 
 async def verify_lead(lead: dict) -> dict | None:
-    """Try candidates in priority order. Return TIER A lead only, else None."""
+    """Try candidates in priority order (orchestrator already ranked them). Tier-A only."""
     candidates = lead.get("email_candidates", [])
     if not candidates:
         return None
-
-    def priority(e):
-        local = e.split("@")[0]
-        # Personal-looking first
-        if local in {"info", "hello", "contact", "support", "team", "admin", "office", "sales"}:
-            return 2
-        return 1
-
-    sorted_c = sorted(candidates, key=priority)[:8]
+    # Trust the orchestrator's ranking; cap at 6 to limit Reoon credit burn per lead
+    sorted_c = list(candidates)[:6]
 
     for email in sorted_c:
         res = await verify_email(email)

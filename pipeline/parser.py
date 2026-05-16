@@ -257,7 +257,7 @@ def find_company(text: str) -> str | None:
 
 
 async def parse_article(url: str) -> dict | None:
-    """Returns dict with name, website, role, company, or None."""
+    """Returns dict with name, website, role, company, article_emails, or None."""
     html = await fetch(url)
     if not html:
         return None
@@ -278,6 +278,10 @@ async def parse_article(url: str) -> dict | None:
     if not website:
         return None
 
+    # NEW: extract emails directly from the article body HTML
+    # Many founders drop their personal gmail/yahoo in interview answers
+    article_emails = extract_emails(str(body))
+
     return {
         "source_url": url,
         "source": source_label(url),
@@ -285,6 +289,7 @@ async def parse_article(url: str) -> dict | None:
         "website": website,
         "role": find_role(body_text),
         "company": find_company(body_text),
+        "article_emails": sorted(article_emails),
     }
 
 
@@ -361,3 +366,40 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
 
     all_emails = {e for e in all_emails if e.split("@")[0] not in JUNK_LOCALS}
     return sorted(all_emails)
+
+
+FREE_PROVIDERS = {"gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
+                  "aol.com","protonmail.com","proton.me","pm.me","mail.com",
+                  "live.com","msn.com","yandex.com","yandex.ru","zoho.com",
+                  "fastmail.com","tutanota.com","gmx.com","mac.com","me.com"}
+
+
+def rank_emails(emails: list[str], founder_name: str) -> list[str]:
+    """Sort emails so the highest-personal-fit comes first.
+    Order:
+      1. Founder firstname/lastname @ free provider (e.g. sarah@gmail.com)
+      2. Free provider with any local part (e.g. random@gmail.com)
+      3. Founder firstname/lastname @ business domain
+      4. Other personal-looking @ business domain
+      5. Generic @ business domain (info@, hello@, contact@)
+    """
+    if not emails: return []
+    parts = founder_name.lower().split() if founder_name else []
+    first = re.sub(r"[^a-z]", "", parts[0]) if parts else ""
+    last = re.sub(r"[^a-z]", "", parts[-1]) if len(parts) > 1 else ""
+
+    def score(e: str) -> int:
+        local, _, dom = e.partition("@")
+        is_free = dom in FREE_PROVIDERS
+        local_l = local.lower()
+        name_match = (first and first in local_l) or (last and last in local_l)
+        is_generic = local_l in {"info","hello","contact","support","team","admin","office",
+                                 "sales","help","press","media","hr","jobs","careers"}
+        # Lower is better (sorted ascending)
+        if is_free and name_match: return 0
+        if is_free: return 1
+        if name_match: return 2
+        if is_generic: return 9
+        return 5
+
+    return sorted(set(emails), key=score)

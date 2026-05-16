@@ -10,9 +10,11 @@ from sqlalchemy import select, func, update
 from db import SessionLocal, SeenURL, RawLead, VerifiedLead, Batch
 from config import settings
 from pipeline.sources import collect_all_urls, source_label
-from pipeline.parser import parse_article, find_emails
+from pipeline.parser import parse_article, find_emails, rank_emails
 from pipeline.verifier import verify_lead
 from pipeline.delivery import deliver_batch
+from pipeline import finder as skrapp_finder
+import urllib.parse
 
 log = logging.getLogger("orchestrator")
 
@@ -129,20 +131,72 @@ async def save_verified(verified: dict, batch_id: int) -> bool:
 
 
 async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict | None:
-    """Parse a single founder URL; return raw lead dict with email_candidates, or None."""
+    """4-layer email discovery:
+      L1: emails in the article body (free) — gmail/yahoo founders often drop here
+      L2: emails on the founder's website (free)
+      L3: pattern-guess from website domain (free)
+      L4: Skrapp finder (1 credit) — only if L1-L3 produced nothing or only generics
+    """
     async with sem:
         try:
             parsed = await parse_article(url)
             if not parsed:
                 await mark_seen(url, source, "no_parse")
                 return None
-            emails = await find_emails(parsed["website"], parsed["name"])
-            if not emails:
+
+            # L1: emails in the article body itself (could be founder's personal gmail)
+            article_emails = parsed.get("article_emails", []) or []
+            # L2 + L3: scrape founder website + pattern-guess
+            website_emails = await find_emails(parsed["website"], parsed["name"])
+
+            # Combine, dedupe, rank
+            combined = list(set(article_emails + website_emails))
+
+            # Decide if we need Skrapp (L4): no emails OR only generics
+            need_skrapp = True
+            if combined:
+                # If we have ANY personal-looking or free-provider email, we're good
+                has_personal = False
+                for e in combined:
+                    local, _, dom = e.partition("@")
+                    if dom in {"gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
+                               "aol.com","protonmail.com","proton.me","live.com","msn.com",
+                               "me.com","mac.com"}:
+                        has_personal = True; break
+                    if local.lower() not in {"info","hello","contact","support","team","admin",
+                                              "office","sales","help","press","media"}:
+                        has_personal = True; break
+                if has_personal:
+                    need_skrapp = False
+
+            # L4: Skrapp finder, only if needed
+            if need_skrapp and skrapp_finder.get_state().get("enabled"):
+                # Extract first/last from name, domain from website
+                words = parsed["name"].split()
+                if len(words) >= 2:
+                    first, last = words[0], words[-1]
+                    try:
+                        parsed_url = urllib.parse.urlparse(
+                            parsed["website"] if parsed["website"].startswith("http")
+                            else "https://" + parsed["website"]
+                        )
+                        domain = parsed_url.netloc.replace("www.", "").lower()
+                        skrapp_res = await skrapp_finder.find_email(first, last, domain)
+                        if skrapp_res and skrapp_res.get("email"):
+                            combined.insert(0, skrapp_res["email"])
+                    except Exception:
+                        pass
+
+            if not combined:
                 await mark_seen(url, source, "no_emails")
                 return None
+
+            # Rank emails: personal first, generic last
+            ranked = rank_emails(combined, parsed["name"])
+
             await mark_seen(url, source, "parsed")
-            await save_raw_lead(parsed, emails)
-            return {**parsed, "email_candidates": emails}
+            await save_raw_lead(parsed, ranked)
+            return {**parsed, "email_candidates": ranked}
         except Exception as e:
             log.debug(f"process_one_url {url}: {e}")
             await mark_seen(url, source, "error")
