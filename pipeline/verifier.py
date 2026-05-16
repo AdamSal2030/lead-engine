@@ -11,9 +11,15 @@ log = logging.getLogger("verifier")
 REOON_IPS = [s.strip() for s in settings.REOON_IPS.split(",") if s.strip()]
 REOON_HOST = "emailverifier.reoon.com"
 
+# In-memory counter for Reoon verifier calls (resets on process restart).
+# Reoon doesn't expose a remaining-credit endpoint, so this tracks usage since this deploy.
+CALLS_MADE = 0
+
 
 async def verify_email(email: str, retries: int = 3) -> dict | None:
     """Returns Reoon power response or None."""
+    global CALLS_MADE
+    CALLS_MADE += 1
     qs = urllib.parse.urlencode({"email": email, "key": settings.REOON_API_KEY, "mode": "power"})
     url = f"{settings.REOON_BASE_URL}/api/v1/verify?{qs}"
     for attempt in range(retries):

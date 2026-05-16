@@ -30,15 +30,8 @@ def status_badge(status: str) -> str:
     return f'<span class="badge" style="background:{color};color:#000">{status}</span>'
 
 
-SYDNEY_PICS = [
-    "https://upload.wikimedia.org/wikipedia/commons/2/2f/Sydney_Sweeney_at_the_2024_Toronto_International_Film_Festival_%28cropped%2C_rotated%29.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/4/4f/Sydney_Sweeney_2019_by_Glenn_Francis.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/b/b0/Sydney_Sweeney_at_Berlinale_2023_%28portrait%29.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/b/b1/SydneySweeney-TIFF2025-03_%28cropped%29.png",
-]
-
-
 async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_batch: dict | None, is_running_now: bool) -> str:
+    from pipeline.verifier import CALLS_MADE as REOON_CALLS
     async with SessionLocal() as s:
         total = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
         recent_batches = (await s.execute(select(Batch).order_by(desc(Batch.id)).limit(15))).scalars().all()
@@ -107,9 +100,6 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
         loop_pill = '<span class="pill pill-live">● LIVE</span>'
     else:
         loop_pill = '<span class="pill pill-idle">IDLE</span>'
-
-    sydney_idx = (datetime.utcnow().minute // 5) % len(SYDNEY_PICS)
-    sydney_url = SYDNEY_PICS[sydney_idx]
 
     return f"""<!doctype html>
 <html lang="en">
@@ -271,22 +261,6 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   }}
   .dl-link {{ color: #00ffff; font-weight: 700; font-size: 12px; }}
 
-  /* Sydney panel */
-  .sydney-panel {{
-    margin-top: 28px;
-    background: rgba(0,15,10,0.7);
-    border: 1px solid rgba(0,255,255,0.2);
-    padding: 16px;
-    display: flex; gap: 16px; align-items: center;
-  }}
-  .sydney-panel img {{
-    width: 110px; height: 110px; border-radius: 50%; object-fit: cover;
-    border: 2px solid #00ffa8;
-    box-shadow: 0 0 18px rgba(0,255,168,0.5);
-  }}
-  .sydney-quote {{ font-style: italic; color: #d8ffe8; font-size: 14px; line-height: 1.5; }}
-  .sydney-name {{ font-weight: 600; margin-top: 8px; font-size: 11px; color: #00ffa8; text-transform: uppercase; letter-spacing: 2px; }}
-
   .auto-refresh {{
     font-size: 10px; color: #4a7060;
     margin-top: 24px; text-align: center;
@@ -321,8 +295,8 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     <div class="stat-label">Current Target</div>
   </div>
   <div class="stat-card">
-    <div class="stat-num">{settings.BATCH_SIZE_MAX:,}</div>
-    <div class="stat-label">Ramp Ceiling</div>
+    <div class="stat-num">{REOON_CALLS:,}</div>
+    <div class="stat-label">Reoon Calls (this run)</div>
   </div>
 </div>
 
@@ -349,14 +323,6 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     {leads_table}
   </tbody>
 </table>
-
-<div class="sydney-panel">
-  <img src="{sydney_url}" alt="" loading="lazy" onerror="this.style.display='none'">
-  <div>
-    <div class="sydney-quote">"def grow_pipeline(): while not done: scrape()"</div>
-    <div class="sydney-name">— hustle.py</div>
-  </div>
-</div>
 
 <div class="auto-refresh">// auto-refresh 20s · {datetime.utcnow().strftime("%H:%M:%S")} UTC</div>
 
