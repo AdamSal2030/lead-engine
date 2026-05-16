@@ -31,8 +31,9 @@ class Settings(BaseSettings):
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500
-    MAX_VERIFY_CONCURRENCY: int = 3
-    SCRAPE_CONCURRENCY: int = 6
+    MAX_VERIFY_CONCURRENCY: int = 3      # leave at 3 — pushing higher trips Reoon rate limits
+    SCRAPE_CONCURRENCY: int = 12         # scrape parallelism (different hosts, safe to bump)
+    EMAIL_FIND_CONCURRENCY: int = 4      # parallel page fetches per founder website
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"

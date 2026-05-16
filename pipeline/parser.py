@@ -197,6 +197,8 @@ def extract_emails(html: str) -> set[str]:
 
 
 async def find_emails(website: str, founder_name: str) -> list[str]:
+    import asyncio
+    from config import settings
     if not website: return []
     if not website.startswith("http"): website = "https://" + website
     if any(b in website for b in SOCIALS + HOST_BUILDERS): return []
@@ -205,16 +207,20 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
     base = f"{parsed.scheme}://{parsed.netloc}"
 
     pages = [website]
-    for path in ["/contact", "/contact-us", "/contact/", "/about", "/about-us",
-                 "/about/", "/team", "/get-in-touch", "/connect"]:
+    for path in ["/contact", "/contact-us", "/about", "/about-us", "/team"]:
         pages.append(base + path)
 
+    # Fetch pages in parallel (same host, but few requests — OK for almost all sites)
+    sem = asyncio.Semaphore(settings.EMAIL_FIND_CONCURRENCY)
+    async def fetch_one(p):
+        async with sem:
+            return await fetch(p, timeout=10)
+    htmls = await asyncio.gather(*[fetch_one(p) for p in pages[:5]], return_exceptions=True)
+
     all_emails: set[str] = set()
-    for page in pages[:5]:
-        html = await fetch(page, timeout=10)
-        if html:
+    for html in htmls:
+        if isinstance(html, str):
             all_emails |= extract_emails(html)
-            if len(all_emails) >= 5: break
 
     # Generate pattern emails if nothing found
     if not all_emails and founder_name:
