@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     BETWEEN_BATCH_SECONDS: int = 30
     EXHAUSTED_RETRY_SECONDS: int = 3600
 
+    # Batch persistence — keep running until target hit
+    PARTIAL_BATCHES: bool = False    # False = wait for new URLs; True = finish at pool exhaustion
+    BATCH_MAX_HOURS: int = 72        # safety net: deliver partial after this much wall-time
+    RETRY_SITEMAP_SECONDS: int = 3600  # if pool dries mid-batch, refetch sitemaps after this
+
     # Backwards-compat
     DEFAULT_TARGET: int = 500
     MAX_VERIFY_CONCURRENCY: int = 3      # leave at 3 — pushing higher trips Reoon rate limits
