@@ -88,7 +88,7 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
     return all_urls
 
 
-PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com"]
+PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com"]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
@@ -113,6 +113,7 @@ def source_label(url: str) -> str:
     if "famoustimes" in url: return "FamousTimes"
     if "disruptmagazine" in url: return "DisruptMagazine"
     if "valiantceo" in url: return "ValiantCEO"
+    if "ceomonthly" in url: return "CEOMonthly"
     for s in VOYAGE_SITES:
         if s in url:
             return s.replace(".com", "").replace("voyage", "Voyage").title()
