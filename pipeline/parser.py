@@ -51,14 +51,36 @@ HOST_BUILDERS = ["wixsite.com","squarespace.com","weebly.com","webnode.com",
                  "wiseinterviews.com","substack.com","carrd.co","linktr.ee"]
 
 
+UA_LIST = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+]
+
+
 async def fetch(url: str, timeout: int = 15) -> str | None:
-    try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as cli:
-            r = await cli.get(url)
-            if r.status_code == 200 and "text/html" in r.headers.get("content-type", "").lower():
-                return r.text
-    except Exception:
-        pass
+    """Try multiple UAs; if all fail and the host is known Cloudflare-blocked, try Wayback."""
+    for ua in UA_LIST:
+        try:
+            h = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
+            async with httpx.AsyncClient(headers=h, timeout=timeout, follow_redirects=True) as cli:
+                r = await cli.get(url)
+                if r.status_code == 200 and "text/html" in r.headers.get("content-type", "").lower():
+                    return r.text
+        except Exception:
+            continue
+
+    # Last resort: try Wayback for known Cloudflare-blocked hosts
+    if any(host in url for host in ("canvasrebel.com", "boldjourney.com")):
+        try:
+            wb_url = f"https://web.archive.org/web/2026/{url}"
+            h = {"User-Agent": UA_LIST[0]}
+            async with httpx.AsyncClient(headers=h, timeout=45, follow_redirects=True) as cli:
+                r = await cli.get(wb_url)
+                if r.status_code == 200 and "text/html" in r.headers.get("content-type", "").lower():
+                    return r.text
+        except Exception:
+            pass
     return None
 
 
