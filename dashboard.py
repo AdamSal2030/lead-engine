@@ -30,12 +30,12 @@ def status_badge(status: str) -> str:
     return f'<span class="badge" style="background:{color}">{status}</span>'
 
 
-# Wikipedia Commons public photos
+# Wikipedia Commons public photos (verified working full-size URLs)
 SYDNEY_PICS = [
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/04/Sydney_Sweeney_by_Gage_Skidmore.jpg/512px-Sydney_Sweeney_by_Gage_Skidmore.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/Sydney_Sweeney_at_2018_Miss_Bala_Premiere.jpg/512px-Sydney_Sweeney_at_2018_Miss_Bala_Premiere.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Sydney_Sweeney_2024.jpg/512px-Sydney_Sweeney_2024.jpg",
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Sydney_Sweeney_in_2024.jpg/512px-Sydney_Sweeney_in_2024.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/2/2f/Sydney_Sweeney_at_the_2024_Toronto_International_Film_Festival_%28cropped%2C_rotated%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/4/4f/Sydney_Sweeney_2019_by_Glenn_Francis.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/b/b0/Sydney_Sweeney_at_Berlinale_2023_%28portrait%29.jpg",
+    "https://upload.wikimedia.org/wikipedia/commons/b/b1/SydneySweeney-TIFF2025-03_%28cropped%29.png",
 ]
 
 
