@@ -12,18 +12,84 @@ log = logging.getLogger("parser")
 EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b")
 
 NON_PERSON = {
-    "small", "business", "gift", "guide", "community", "heart", "introverted",
-    "spotlight", "conversations", "conversation", "interviews", "interview",
-    "inspirational", "inspiring", "local", "stories", "story", "portrait",
-    "portraits", "creative", "creatives", "entrepreneur", "entrepreneurs",
-    "founder", "founders", "ceo", "owner", "leader", "leaders", "success",
-    "feature", "featured", "meet", "life", "work", "behind", "check", "read",
-    "exclusive", "amazing", "best", "top", "perspectives", "thoughts", "insights",
-    "podcasts", "podcast", "weekly", "daily", "new", "introducing", "welcome",
-    "where", "the", "building", "finding", "power",
-    "open", "late", "early", "night", "day", "morning", "afternoon",
-    "guide", "list", "review", "place", "places", "restaurant", "restaurants",
-    "shop", "shops", "fitness", "tour", "tours", "events",
+    # Articles / determiners
+    "the","a","an","this","that","these","those","my","your","our","their",
+    # Prepositions
+    "of","from","to","in","on","at","by","for","with","without","about","into",
+    "through","during","before","after","above","below","under","over","across",
+    "behind","beyond","upon",
+    # Conjunctions
+    "and","or","but","nor","so","yet","than","because","while","whereas",
+    # Question words
+    "why","how","what","when","where","who","whom","whose","which","whether",
+    # Comparatives / adjectives in titles
+    "more","less","most","least","better","best","worse","worst","top","greatest",
+    "amazing","incredible","essential","important","key","vital","crucial",
+    "ultimate","complete","total","new","newest","latest","first","last","next",
+    "biggest","smallest","cheapest","easiest","hardest",
+    # Action / -ing verbs (article-title style)
+    "building","creating","designing","exploring","finding","growing","scaling",
+    "leading","making","running","starting","launching","raising","selling","buying",
+    "managing","fixing","solving","tackling","facing","overcoming","achieving",
+    "transforming","reinventing","disrupting","revolutionizing","modernizing",
+    "thinking","writing","reading","working","living","being","becoming","doing",
+    "going","coming","getting","giving","taking","keeping","holding","using",
+    "succeeding","mastering","beating","winning","losing","helping","building",
+    "understanding","knowing","learning","teaching","training","practicing",
+    "navigating","embracing","celebrating","introducing","welcoming","meeting","greeting",
+    # Title nouns
+    "story","stories","journey","journeys","path","paths","road","way","ways",
+    "guide","guides","tutorial","lesson","lessons","tip","tips","secret","secrets",
+    "rule","rules","step","steps","method","methods","framework","frameworks",
+    "system","systems","strategy","strategies","tactic","tactics","approach","approaches",
+    "principle","principles","practice","practices","habit","habits",
+    "business","businesses","company","companies","brand","brands","startup","startups",
+    "founder","founders","entrepreneur","entrepreneurs","leader","leaders",
+    "ceo","cto","cmo","coo","cfo","cio","vp","manager","director","executive",
+    "owner","owners","employee","employees","worker","workers","team","teams",
+    "client","clients","customer","customers","user","users","member","members",
+    "expert","experts","professional","professionals","specialist","specialists",
+    "consultant","consultants","coach","coaches","mentor","mentors","advisor","advisors",
+    "investor","investors","partner","partners","stakeholder","stakeholders",
+    "marketing","sales","finance","operations","technology","tech","engineering",
+    "product","products","service","services","industry","industries","market","markets",
+    "economy","commerce","trade","retail","wholesale",
+    "ai","ml","data","analytics","insight","insights","metric","metrics","kpi",
+    "growth","scale","expansion","launch","release","rollout",
+    # Generic
+    "small","big","large","global","local","national","international",
+    "exclusive","conversations","conversation","interview","interviews","feature","featured",
+    "spotlight","spotlights","profile","profiles","portrait","portraits",
+    "meet","meets","welcome",
+    "inspirational","inspiring","authentic","real","true","powerful",
+    "amazing","awesome","brilliant","creative","creatives","innovative","innovator",
+    "successful","success","fail","failure","mistake","mistakes",
+    "art","artist","artists","artistry","craft","crafts","design","designer","designers",
+    "creators","creating",
+    "weekly","daily","monthly","yearly","annual","quarterly","past","future","present",
+    "today","tomorrow","yesterday","now","then","later","sooner","longer","shorter",
+    "morning","afternoon","evening","night","day","week","month","year",
+    "early","late","fast","slow","quick","rapid",
+    "one","two","three","four","five","six","seven","eight","nine","ten","hundred","thousand","million",
+    "open","closed","public","private","secret","hidden","visible","invisible",
+    "good","bad","great","poor","excellent","terrible",
+    "front","side","middle","center","corner",
+    "fake","false","authentic","genuine","original","copy","real",
+    # Industries
+    "fitness","health","wellness","therapy","mental","physical","spiritual",
+    "luxury","premium","budget","affordable","high-end",
+    "asset","assets","investment","investments","portfolio","portfolios",
+    "menu","order","food","restaurant","dining","kitchen",
+    "law","legal","attorney","lawyer","compliance","regulation",
+    "operational","performance","productive","efficient",
+    "architecture","architectural",
+    "jewelry","fashion","beauty","cosmetic","makeup","skincare",
+    "research","studies","study","analysis","review","reviews","report","reports",
+    "just","only","even","still","yet","also","heart","gift","portrait",
+    # Specific noisy categories I caught
+    "introverted","power","behind","check","read","perspectives","thoughts","insights",
+    "podcast","podcasts","introducing","place","places","shop","shops","tour","tours",
+    "events","life",
 }
 
 JUNK_DOMAINS = {"sentry.io", "wixpress.com", "example.com", "domain.com", "test.com"}
@@ -92,38 +158,64 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
 
 
 def clean_name(title_text: str) -> str | None:
+    """Strict name extraction. Rejects article titles, business names, lists, etc."""
+    if not title_text: return None
     name = title_text
-    # Reject guide / list articles outright
+    # Reject guide / list / faq articles outright
     rejects = [r"\bguide to\b", r"\blist of\b", r"\btop \d+", r"\bbest of\b",
-               r"\bfaqs?\b", r"\bspotlight\b", r"\bportraits? of\b", r"\binspiring stories\b"]
+               r"\bfaqs?\b", r"\bspotlight\b", r"\bportraits? of\b", r"\binspiring stories\b",
+               r"\bhow to\b", r"\bwhy you\b", r"\bwhat is\b", r"\bwhat are\b",
+               r"\b(?:5|6|7|8|9|10)\s+(?:ways|tips|tricks|things|lessons|reasons)\b"]
     for pat in rejects:
         if re.search(pat, name, re.IGNORECASE):
             return None
+
+    # Strip leading interview-style prefixes
     for prefix in ["Meet ", "Inspiring Conversations with ", "Conversations with ",
-                   "Life & Work with ", "Hidden Gems: Meet ", "Daily Inspiration: Meet "]:
+                   "Life & Work with ", "Hidden Gems: Meet ", "Daily Inspiration: Meet ",
+                   "Exclusive Interview with ", "Interview with "]:
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
+
+    # Cut at separator | – — :
     name = re.split(r"\s*[|–—:]\s*", name)[0].strip()
-    name = re.split(r"\s+(?:of|from|on|at|with)\s+", name, flags=re.IGNORECASE)[0].strip()
+    # Cut at " of/from/on/at/with/in "
+    name = re.split(r"\s+(?:of|from|on|at|with|in)\s+", name, flags=re.IGNORECASE)[0].strip()
+    # Strip possessive 's, credentials, suffixes
     name = re.sub(r"[‘’]s\b.*", "", name)
+    name = re.sub(r",\s*(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\b.*",
+                  "", name, flags=re.IGNORECASE)
     # Strip honorifics
-    name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach)\s+", "", name, flags=re.IGNORECASE)
-    # Strip trailing role words
+    name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach|DJ)\s+",
+                  "", name, flags=re.IGNORECASE)
+    # Strip trailing role / title words
     name = re.sub(r"\s+(Photographer|Designer|Founder|CEO|Owner|Author|Artist|Coach|"
                   r"Consultant|Entrepreneur|Director|President|Esthetician|Therapist|"
-                  r"novelist|Filmmaker|Chef|Doctor|Lawyer|Realtor|Stylist|Influencer)$",
+                  r"novelist|Filmmaker|Chef|Doctor|Lawyer|Realtor|Stylist|Influencer)\s*$",
                   "", name, flags=re.IGNORECASE)
+
+    # Normalize ALL-CAPS or all-lowercase names to Title Case
+    if name == name.upper() or name == name.lower():
+        name = " ".join(w.capitalize() for w in name.split())
+
     words = name.split()
     if not (2 <= len(words) <= 4) or any(c.isdigit() for c in name):
         return None
-    if not all(re.match(r"^[A-Za-z][A-Za-z'\-\.]*$", w) for w in words):
+    # Each word: starts with capital, letters (incl unicode/accented) + optional hyphen/apostrophe
+    if not all(re.match(r"^[A-ZÀ-Ý][\w'\-À-ÿ]+$|^[A-Z]\.?$", w, re.UNICODE) for w in words):
         return None
-    if words[0].lower() in NON_PERSON:
+    # No name-word can match the title-words blocklist
+    if any(w.lower().rstrip(".") in NON_PERSON for w in words):
         return None
-    # Reject if any word is in NON_PERSON (e.g. "Open Late")
-    if any(w.lower() in NON_PERSON for w in words):
+    # Reject if all-caps after our normalization attempt failed (unusual)
+    # Reject special punctuation in name
+    if any(c in name for c in '"”“'):
         return None
+    # Each word at least 2 chars OR a single uppercase letter (initial)
+    for w in words:
+        if len(w) == 1 and w.isupper(): continue  # initial OK
+        if len(w) < 2: return None
     return name
 
 
