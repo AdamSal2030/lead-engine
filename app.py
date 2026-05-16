@@ -189,6 +189,61 @@ async def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}
 
 
+@app.get("/debug")
+async def debug():
+    """Diagnostic endpoint (open) — shows source pool sizes, Reoon health, recent batch state. No PII."""
+    from pipeline.sources import collect_all_urls
+    from pipeline.verifier import verify_email
+
+    diag = {"ts": datetime.utcnow().isoformat()}
+
+    # 1. Source pools
+    try:
+        all_urls = await asyncio.wait_for(collect_all_urls(), timeout=60)
+        diag["sources"] = {k: len(v) for k, v in all_urls.items()}
+        diag["total_pool"] = sum(diag["sources"].values())
+    except Exception as e:
+        diag["sources_error"] = str(e)[:200]
+
+    # 2. Reoon health
+    try:
+        r = await asyncio.wait_for(verify_email("test@gmail.com"), timeout=20)
+        diag["reoon"] = {"reachable": r is not None, "sample_response_keys": list(r.keys())[:8] if r else None}
+    except Exception as e:
+        diag["reoon"] = {"reachable": False, "error": str(e)[:200]}
+
+    # 3. DB counts
+    async with SessionLocal() as s:
+        from db import SeenURL, RawLead, VerifiedLead
+        diag["db"] = {
+            "seen_urls": (await s.execute(select(func.count()).select_from(SeenURL))).scalar_one(),
+            "raw_leads": (await s.execute(select(func.count()).select_from(RawLead))).scalar_one(),
+            "verified_leads": (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one(),
+        }
+        # Last 5 batches with their state
+        recent = (await s.execute(
+            select(Batch).order_by(desc(Batch.id)).limit(5)
+        )).scalars().all()
+        diag["recent_batches"] = [
+            {"id": b.id, "status": b.status, "target": b.target,
+             "delivered": b.delivered_count, "trigger": b.trigger,
+             "started": b.started_at.isoformat() if b.started_at else None,
+             "finished": b.finished_at.isoformat() if b.finished_at else None,
+             "notes": (b.notes or "")[:200]}
+            for b in recent
+        ]
+
+    # 4. Current loop state
+    diag["loop"] = {
+        "paused": _perpetual_paused,
+        "current_target": _loop_state.get("current_target"),
+        "completed_batches": _loop_state.get("completed_batches"),
+        "currently_running": await is_running(),
+        "current_batch": await get_current_status(),
+    }
+    return diag
+
+
 @app.get("/status", dependencies=[Depends(require_dash_login)])
 async def status():
     async with SessionLocal() as s:
