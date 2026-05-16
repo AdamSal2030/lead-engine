@@ -6,13 +6,14 @@ import os
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from sqlalchemy import select, desc, func
 
 from config import settings
 from db import init_db, SessionLocal, Batch, VerifiedLead
 from pipeline.orchestrator import run_batch, get_current_status, is_running
 from pipeline.delivery import notify_sources_exhausted
+from dashboard import render_dashboard
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,8 +96,20 @@ def check_auth(authorization: str | None):
         raise HTTPException(401, "Unauthorized")
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
+    html = await render_dashboard(
+        loop_state=_loop_state,
+        perpetual_paused=_perpetual_paused,
+        current_batch=await get_current_status(),
+        is_running_now=await is_running(),
+    )
+    return HTMLResponse(content=html)
+
+
+@app.get("/api")
+async def api_root():
+    """JSON endpoint (same data as the HTML dashboard, for scripts)."""
     return {
         "service": "lead-engine",
         "mode": "perpetual" if settings.PERPETUAL_ENABLED else "manual-only",
