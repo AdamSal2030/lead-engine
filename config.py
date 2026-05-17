@@ -7,10 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Required
+    # Email verifiers — MillionVerifier is primary (1000 RPM), Reoon is fallback
+    MV_API_KEY: str = ""
+
     REOON_API_KEY: str = ""
-    # Multiple Reoon keys, comma-separated — supersedes REOON_API_KEY if set
-    # Each key gets its own 20 RPM budget = 4 keys × 20 RPM = 80 RPM combined
     REOON_API_KEYS: str = ""
 
     # Skrapp email finder (Layer 4 — fires only when free extraction fails)
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500
-    MAX_VERIFY_CONCURRENCY: int = 4      # 4 is safe-ish; 5+ trips Reoon rate limits
+    MAX_VERIFY_CONCURRENCY: int = 30     # MV handles 1000 RPM → 30 concurrent is comfortable
     SCRAPE_CONCURRENCY: int = 20         # 30 was too aggressive — caused resource starvation
     EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
     SKRAPP_CONCURRENCY: int = 2          # parallel Skrapp calls — keep low to avoid 429

@@ -33,8 +33,11 @@ def status_badge(status: str) -> str:
 async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_batch: dict | None, is_running_now: bool) -> str:
     from pipeline.verifier import CALLS_MADE as REOON_CALLS
     from pipeline.finder import get_state as skrapp_state, _load_counter as _sk_load
+    from pipeline.mv_verifier import get_state as mv_state, _load_counter as _mv_load
     await _sk_load()
+    await _mv_load()
     sk = skrapp_state()
+    mv = mv_state()
     async with SessionLocal() as s:
         total = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
         recent_batches = (await s.execute(select(Batch).order_by(desc(Batch.id)).limit(15))).scalars().all()
@@ -298,15 +301,20 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     <div class="stat-label">Current Target</div>
   </div>
   <div class="stat-card">
-    <div class="stat-num">{REOON_CALLS:,}</div>
-    <div class="stat-label">Reoon Verifier Calls</div>
+    <div class="stat-num">{mv['calls']:,}</div>
+    <div class="stat-label">MV Verifier Calls (primary)</div>
   </div>
 </div>
 
 <div style="margin-top:14px; font-size:12px; color:#65a08a;">
-  <span style="color:#00ffa8">SKRAPP:</span>
-  {sk['calls']} calls · {sk['hits']} hits ({(100*sk['hits']/sk['calls']) if sk['calls'] else 0:.0f}% success)
-  · {'⚠ QUOTA EXHAUSTED — running free-only' if sk['quota_exhausted'] else ('✓ enabled' if sk['enabled'] else '○ disabled')}
+  <span style="color:#00ffa8">MILLIONVERIFIER:</span>
+  {mv['calls']:,} calls · {mv['hits']:,} hits ({mv['hit_rate']:.0f}% Tier-A rate)
+  · {'⚠ QUOTA EXHAUSTED' if mv['quota_exhausted'] else ('✓ enabled' if mv['enabled'] else '○ disabled')}
+  &nbsp;|&nbsp;
+  <span style="color:#00ffa8">REOON</span> (fallback): {REOON_CALLS:,} calls
+  &nbsp;|&nbsp;
+  <span style="color:#00ffa8">SKRAPP</span>: {sk['calls']:,}/{sk['hits']:,} ({(100*sk['hits']/sk['calls']) if sk['calls'] else 0:.0f}%)
+  · {'⚠' if sk['quota_exhausted'] else ('✓' if sk['enabled'] else '○')}
 </div>
 
 <div><a href="{base}/download-all.csv" class="dl-all-btn">⬇ Download all {total:,} leads</a></div>

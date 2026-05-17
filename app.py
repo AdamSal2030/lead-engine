@@ -122,11 +122,13 @@ async def lifespan(app: FastAPI):
     import pipeline.finder  # SkrappCache
     import pipeline.company_resolver  # CompanyDomainCache
     await init_db()
-    # Load persistent Reoon call counter so dashboard shows correct total before any new calls
+    # Load persistent verifier counters
     from pipeline.verifier import _load_counter
     await _load_counter()
     from pipeline.finder import _load_counter as _sk_load
     await _sk_load()
+    from pipeline.mv_verifier import _load_counter as _mv_load
+    await _mv_load()
     await cleanup_zombie_batches()
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())

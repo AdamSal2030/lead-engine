@@ -87,31 +87,50 @@ async def verify_email(email: str, retries: int = 3) -> dict | None:
 
 
 async def verify_lead(lead: dict) -> dict | None:
-    """Try candidates in priority order (orchestrator already ranked them). Tier-A only."""
+    """Verify candidates with MillionVerifier (primary) and Reoon (fallback).
+    Tier-A only — both verifiers must confirm safe + non-catch-all."""
+    from pipeline import mv_verifier as mv
     candidates = lead.get("email_candidates", [])
     if not candidates:
         return None
-    # Trust the orchestrator's ranking; cap at 6 to limit Reoon credit burn per lead
     sorted_c = list(candidates)[:6]
 
     for email in sorted_c:
+        # PRIMARY: MillionVerifier (fast + cheap)
+        mv_res = await mv.verify(email)
+        if mv_res:
+            result = mv_res.get("result")
+            if result == "ok":
+                return {
+                    **lead,
+                    "verified_email": email,
+                    "verification": {
+                        "status": "safe", "verifier": "mv",
+                        "result": result, "quality": mv_res.get("quality"),
+                        "subresult": mv_res.get("subresult"),
+                        "is_catch_all": False, "is_role": mv_res.get("role"),
+                        "score": 98, "tier": "A",
+                    },
+                }
+            # MV gave us a definitive bad result — don't waste a Reoon call
+            if result in ("invalid", "disposable", "catch_all", "unknown"):
+                continue
+            # result == "error" or weird → fall through to Reoon below
+
+        # FALLBACK: Reoon (only when MV failed/errored OR MV is disabled)
         res = await verify_email(email)
         if not res:
             continue
         status = res.get("status")
-        safe = res.get("is_safe_to_send")
+        is_catch = res.get("is_catch_all")
         score = res.get("overall_score") or 0
-        catch = res.get("is_catch_all")
-
-        # Tier A: SMTP-confirmed deliverable, NOT catch-all (catch-all bounces in practice)
-        if status in ("safe", "valid") and not catch:
+        if status in ("safe", "valid") and not is_catch:
             return {
                 **lead,
                 "verified_email": email,
                 "verification": {
-                    "status": status, "score": score,
-                    "is_catch_all": catch, "is_safe_to_send": safe,
-                    "tier": "A",
+                    "status": status, "verifier": "reoon",
+                    "score": score, "is_catch_all": is_catch, "tier": "A",
                 },
             }
     return None
