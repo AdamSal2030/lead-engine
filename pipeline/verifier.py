@@ -50,35 +50,39 @@ async def _persist_counter():
 
 
 async def verify_email(email: str, retries: int = 3) -> dict | None:
-    """Returns Reoon power response or None."""
+    """Returns Reoon power response or None. Uses pooled keys for parallelism."""
     global CALLS_MADE
     await _load_counter()
-    CALLS_MADE += 1
-    # Persist every 10 calls (avoids excessive DB writes)
-    if CALLS_MADE % 10 == 0:
-        await _persist_counter()
-    qs = urllib.parse.urlencode({"email": email, "key": settings.REOON_API_KEY, "mode": "power"})
-    url = f"{settings.REOON_BASE_URL}/api/v1/verify?{qs}"
+    from pipeline.reoon_pool import get_pool
+    pool = get_pool()
+    if not pool.has_keys():
+        return None  # no keys configured
+
     for attempt in range(retries):
-        ip = REOON_IPS[attempt % len(REOON_IPS)] if REOON_IPS else None
+        api_key = await pool.acquire()
+        if not api_key:
+            # All keys rate-limited — back off briefly
+            await asyncio.sleep(3)
+            continue
+
+        CALLS_MADE += 1
+        if CALLS_MADE % 10 == 0:
+            await _persist_counter()
+
+        qs = urllib.parse.urlencode({"email": email, "key": api_key, "mode": "power"})
+        url = f"{settings.REOON_BASE_URL}/api/v1/verify?{qs}"
         try:
-            # If we pinned IPs, use httpx transport with explicit address
-            transport = None
-            if ip:
-                transport = httpx.AsyncHTTPTransport(
-                    local_address=None,
-                    retries=0,
-                )
-            async with httpx.AsyncClient(timeout=30, transport=transport) as cli:
+            async with httpx.AsyncClient(timeout=30) as cli:
                 r = await cli.get(url)
                 if r.status_code == 429:
-                    await asyncio.sleep(5)
+                    pool.mark_ratelimited(api_key, seconds=60)
+                    await asyncio.sleep(2)
                     continue
                 if r.status_code == 200:
                     return r.json()
         except Exception as e:
             log.debug(f"reoon {email} attempt {attempt} fail: {e}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
     return None
 
 

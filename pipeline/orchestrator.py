@@ -231,8 +231,13 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
         start_time = time.time()
 
         try:
+            # Verify concurrency scales with # of Reoon keys
+            from pipeline.reoon_pool import get_pool as _pool
+            n_keys = max(1, len(_pool()))
+            verify_concurrency = settings.MAX_VERIFY_CONCURRENCY * n_keys
             sem_scrape = asyncio.Semaphore(settings.SCRAPE_CONCURRENCY)
-            sem_verify = asyncio.Semaphore(settings.MAX_VERIFY_CONCURRENCY)
+            sem_verify = asyncio.Semaphore(verify_concurrency)
+            log.info(f"  Using {n_keys} Reoon key(s); verify concurrency = {verify_concurrency}")
 
             verified_count = 0
             verify_tasks: list[asyncio.Task] = []

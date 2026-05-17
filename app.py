@@ -26,6 +26,7 @@ log = logging.getLogger("app")
 
 # Perpetual-loop control
 _perpetual_task: asyncio.Task | None = None
+_unibox_task: asyncio.Task | None = None
 _perpetual_paused = False
 _last_exhausted_notice: datetime | None = None
 _loop_state = {"current_target": 0, "completed_batches": 0}
@@ -130,9 +131,19 @@ async def lifespan(app: FastAPI):
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
         log.info("Perpetual loop scheduled.")
+
+    # Unibox sync loop (Instantly reply tracking)
+    if settings.INSTANTLY_API_KEY:
+        global _unibox_task
+        from pipeline.unibox import unibox_loop
+        _unibox_task = asyncio.create_task(unibox_loop())
+        log.info("Unibox sync loop scheduled.")
+
     yield
     if _perpetual_task and not _perpetual_task.done():
         _perpetual_task.cancel()
+    if _unibox_task and not _unibox_task.done():
+        _unibox_task.cancel()
 
 
 app = FastAPI(title="Lead Engine", lifespan=lifespan)
@@ -214,6 +225,24 @@ async def resume(authorization: str = Header(None)):
     global _perpetual_paused
     _perpetual_paused = False
     return {"ok": True, "msg": "Resumed. Next batch will start within 60s."}
+
+
+@app.get("/unibox/sync")
+@app.post("/unibox/sync")
+async def trigger_unibox_sync():
+    """Manually trigger an immediate unibox sync."""
+    if not settings.INSTANTLY_API_KEY:
+        return {"ok": False, "msg": "INSTANTLY_API_KEY not set"}
+    from pipeline.unibox import fetch_replies
+    count = await fetch_replies(limit_pages=10)
+    return {"ok": True, "newly_responded": count}
+
+
+@app.get("/unibox/stats")
+async def unibox_stats():
+    """Reply stats per source."""
+    from pipeline.unibox import get_reply_stats
+    return await get_reply_stats()
 
 
 @app.get("/retry-stuck")

@@ -51,6 +51,9 @@ class VerifiedLead(Base):
     tier = Column(String(2))  # A only — Tier B is filtered out
     batch_id = Column(Integer, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # Reply tracking via Instantly unibox sync
+    responded = Column(Boolean, default=False, index=True)
+    responded_at = Column(DateTime)
 
 
 class Counter(Base):

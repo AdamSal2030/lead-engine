@@ -9,10 +9,17 @@ class Settings(BaseSettings):
 
     # Required
     REOON_API_KEY: str = ""
+    # Multiple Reoon keys, comma-separated — supersedes REOON_API_KEY if set
+    # Each key gets its own 20 RPM budget = 4 keys × 20 RPM = 80 RPM combined
+    REOON_API_KEYS: str = ""
 
     # Skrapp email finder (Layer 4 — fires only when free extraction fails)
     SKRAPP_API_KEY: str = ""
     SKRAPP_ENABLED: bool = True  # auto-disables when quota exhausted; restart to retry
+
+    # Instantly unibox integration (reply tracking)
+    INSTANTLY_API_KEY: str = ""  # base64 'uuid:secret' bearer token
+    INSTANTLY_SYNC_INTERVAL_MINUTES: int = 30
 
     # Delivery (one of these is required for email delivery)
     SMTP_HOST: str = ""
