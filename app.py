@@ -213,20 +213,35 @@ async def api_root():
 
 @app.post("/pause")
 async def pause(authorization: str = Header(None)):
-    """Pause the perpetual loop (current batch finishes, no new batches start)."""
+    """Pause the perpetual loop (Bearer-token auth — for programmatic / curl)."""
     check_auth(authorization)
     global _perpetual_paused
     _perpetual_paused = True
-    return {"ok": True, "msg": "Paused. Resume with POST /resume."}
+    return {"ok": True, "msg": "Paused."}
 
 
 @app.post("/resume")
 async def resume(authorization: str = Header(None)):
-    """Resume the perpetual loop."""
+    """Resume the perpetual loop (Bearer-token auth)."""
     check_auth(authorization)
     global _perpetual_paused
     _perpetual_paused = False
-    return {"ok": True, "msg": "Resumed. Next batch will start within 60s."}
+    return {"ok": True, "msg": "Resumed."}
+
+
+# Dashboard-authed control endpoints — same action, callable from browser via the dashboard
+@app.post("/control/pause", dependencies=[Depends(require_dash_login)])
+async def control_pause():
+    global _perpetual_paused
+    _perpetual_paused = True
+    return JSONResponse({"ok": True, "paused": True}, headers={"Location": "/"}, status_code=302)
+
+
+@app.post("/control/resume", dependencies=[Depends(require_dash_login)])
+async def control_resume():
+    global _perpetual_paused
+    _perpetual_paused = False
+    return JSONResponse({"ok": True, "paused": False}, headers={"Location": "/"}, status_code=302)
 
 
 @app.post("/purge-source/{source}")

@@ -203,19 +203,32 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   }}
 
   /* Download all button */
-  .dl-all-btn {{
+  .dl-all-btn, .ctrl-btn {{
     display: inline-block; margin-top: 12px; padding: 12px 22px;
     background: transparent;
     border: 1px solid #00ffa8;
     color: #00ffa8;
     text-decoration: none; font-weight: 700;
     font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
-    box-shadow: 0 0 14px rgba(0,255,168,0.25), 0 0 0 rgba(0,255,168,0.5) inset;
+    box-shadow: 0 0 14px rgba(0,255,168,0.25);
     transition: all 0.2s;
+    cursor: pointer;
+    font-family: inherit;
   }}
-  .dl-all-btn:hover {{
+  .dl-all-btn:hover, .ctrl-btn:hover {{
     background: rgba(0,255,168,0.1);
-    box-shadow: 0 0 28px rgba(0,255,168,0.6), 0 0 0 rgba(0,255,168,0.5) inset;
+    box-shadow: 0 0 28px rgba(0,255,168,0.6);
+  }}
+  .ctrl-pause {{ border-color: #ffe66b; color: #ffe66b; box-shadow: 0 0 14px rgba(255,230,107,0.25); }}
+  .ctrl-pause:hover {{ background: rgba(255,230,107,0.1); box-shadow: 0 0 28px rgba(255,230,107,0.6); }}
+  .ctrl-resume {{ border-color: #00ffa8; color: #00ffa8; }}
+  .control-bar {{ margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
+  .paused-banner {{
+    background: rgba(255,230,107,0.1);
+    border: 1px solid #ffe66b; color: #ffe66b;
+    padding: 14px 20px; margin-top: 20px;
+    text-align: center; font-weight: 700; letter-spacing: 3px;
+    text-transform: uppercase; font-size: 14px;
   }}
 
   /* Current batch panel */
@@ -317,7 +330,11 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   · {'⚠' if sk['quota_exhausted'] else ('✓' if sk['enabled'] else '○')}
 </div>
 
-<div><a href="{base}/download-all.csv" class="dl-all-btn">⬇ Download all {total:,} leads</a></div>
+<div class="control-bar">
+  <a href="{base}/download-all.csv" class="dl-all-btn">⬇ Download all {total:,} leads</a>
+  {'<form method="post" action="/control/resume" style="display:inline"><button class="ctrl-btn ctrl-resume" type="submit">▶ RESUME ENGINE</button></form>' if perpetual_paused else '<form method="post" action="/control/pause" style="display:inline"><button class="ctrl-btn ctrl-pause" type="submit">⏸ PAUSE ENGINE</button></form>'}
+</div>
+{'<div class="paused-banner">⏸ ENGINE PAUSED — no credits being burned · unibox + analysis still running</div>' if perpetual_paused else ''}
 
 {cb_html}
 
