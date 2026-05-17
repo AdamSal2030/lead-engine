@@ -84,3 +84,23 @@ SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # SQLite doesn't auto-ALTER existing tables when models gain new columns.
+    # Apply additive migrations manually here. Each is idempotent.
+    from sqlalchemy import text
+    migrations = [
+        # responded / responded_at columns added for Instantly unibox reply tracking
+        ("verified_leads", "responded", "ALTER TABLE verified_leads ADD COLUMN responded BOOLEAN DEFAULT 0"),
+        ("verified_leads", "responded_at", "ALTER TABLE verified_leads ADD COLUMN responded_at DATETIME"),
+    ]
+    async with engine.begin() as conn:
+        for table, col, ddl in migrations:
+            try:
+                # Check if column exists
+                r = await conn.execute(text(f"PRAGMA table_info({table})"))
+                cols = {row[1] for row in r.all()}
+                if col not in cols:
+                    await conn.execute(text(ddl))
+            except Exception:
+                # Best effort — don't crash startup if migration fails
+                pass
