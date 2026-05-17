@@ -54,12 +54,13 @@ async def get_unseen_urls(all_by_source: dict[str, list[str]],
 
 
 async def clear_stuck_seen() -> int:
-    """Remove SeenURL rows marked as 'no_emails', 'no_parse', or 'error' so they get retried.
-    Returns count of cleared rows."""
+    """Remove SeenURL rows marked as 'no_emails' or 'error' (TRANSIENT failures) so they get retried.
+    DOES NOT clear 'no_parse' — those URLs were correctly rejected as non-founder content
+    (article titles, question prompts, roundups). Retrying them just burns scrape cycles."""
     from sqlalchemy import delete
     async with SessionLocal() as s:
         result = await s.execute(
-            delete(SeenURL).where(SeenURL.status.in_(["no_emails", "no_parse", "error"]))
+            delete(SeenURL).where(SeenURL.status.in_(["no_emails", "error"]))
         )
         await s.commit()
         return result.rowcount
