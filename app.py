@@ -305,6 +305,47 @@ async def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}
 
 
+@app.get("/debug-quick")
+async def debug_quick():
+    """Fast health snapshot — skips sitemap fetches. Use this when /debug is too slow."""
+    out = {"ts": datetime.utcnow().isoformat()}
+    try:
+        from pipeline.mv_verifier import get_state as mv_state, _load_counter as _mv_load
+        await _mv_load()
+        out["mv"] = mv_state()
+    except Exception as e:
+        out["mv"] = {"error": str(e)[:200]}
+    try:
+        from pipeline.finder import get_state as skrapp_state, _load_counter as _sk_load
+        await _sk_load()
+        out["skrapp"] = skrapp_state()
+    except Exception as e:
+        out["skrapp"] = {"error": str(e)[:200]}
+    try:
+        from pipeline.reoon_pool import get_pool as _rpool
+        p = _rpool()
+        out["reoon_pool"] = {"keys": len(p)}
+    except Exception as e:
+        out["reoon_pool"] = {"error": str(e)[:200]}
+    async with SessionLocal() as s:
+        from db import RawLead, SeenURL
+        from sqlalchemy import text
+        out["db"] = {
+            "seen_urls": (await s.execute(select(func.count()).select_from(SeenURL))).scalar_one(),
+            "raw_leads": (await s.execute(select(func.count()).select_from(RawLead))).scalar_one(),
+            "verified_leads": (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one(),
+            "responded": (await s.execute(select(func.count()).select_from(VerifiedLead).where(VerifiedLead.responded == True))).scalar_one(),
+        }
+        r = await s.execute(text("SELECT status, COUNT(*) FROM seen_urls GROUP BY status"))
+        out["seen_status"] = {row[0]: row[1] for row in r.all()}
+    out["loop"] = {
+        "paused": _perpetual_paused,
+        "currently_running": await is_running(),
+        "current_batch": await get_current_status(),
+    }
+    return out
+
+
 @app.get("/debug")
 async def debug():
     """Diagnostic endpoint (open) — shows source pool sizes, Reoon health, recent batch state. No PII."""
