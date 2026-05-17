@@ -283,6 +283,13 @@ async def unibox_stats():
     return await get_reply_stats()
 
 
+@app.get("/unibox/insights")
+async def unibox_insights():
+    """Deep analysis of who's replying — for lookalike targeting decisions."""
+    from pipeline.unibox import get_reply_insights
+    return await get_reply_insights()
+
+
 @app.get("/retry-stuck")
 @app.post("/retry-stuck")
 async def retry_stuck():

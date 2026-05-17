@@ -40,8 +40,44 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
     mv = mv_state()
     async with SessionLocal() as s:
         total = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
+        responded = (await s.execute(
+            select(func.count()).select_from(VerifiedLead).where(VerifiedLead.responded == True)
+        )).scalar_one() or 0
         recent_batches = (await s.execute(select(Batch).order_by(desc(Batch.id)).limit(15))).scalars().all()
         recent_leads = (await s.execute(select(VerifiedLead).order_by(desc(VerifiedLead.id)).limit(8))).scalars().all()
+
+    # Get reply insights if there's data
+    insights_html = ""
+    if responded > 0:
+        try:
+            from pipeline.unibox import get_reply_insights
+            ins = await get_reply_insights()
+            top_sources = "".join(f'<li>{s}: <b style="color:#00ffa8">{n}</b></li>' for s, n in (ins.get("top_sources") or [])[:5])
+            top_kw = "".join(f'<span class="kw-pill">{k} ({n})</span>' for k, n in (ins.get("top_niche_keywords") or [])[:12])
+            top_tlds = "".join(f'<li>{t}: <b style="color:#00ffa8">{n}</b></li>' for t, n in (ins.get("top_tlds") or [])[:5])
+            free = ins.get("domain_split", {}).get("free_pct", 0)
+            insights_html = f"""
+        <h2>// reply insights — who responds to your outreach</h2>
+        <div class="insights-grid">
+          <div class="insights-card">
+            <div class="ins-label">Total Responders</div>
+            <div class="ins-big">{ins.get("total_responders", 0)}</div>
+            <div class="muted">{free}% on free providers (gmail/yahoo/etc) · rest on business domains</div>
+          </div>
+          <div class="insights-card">
+            <div class="ins-label">Top Reply Sources</div>
+            <ul class="ins-list">{top_sources}</ul>
+          </div>
+          <div class="insights-card">
+            <div class="ins-label">Top Business TLDs</div>
+            <ul class="ins-list">{top_tlds}</ul>
+          </div>
+        </div>
+        <div class="kw-cloud-label">Niche keywords from responding companies</div>
+        <div class="kw-cloud">{top_kw}</div>
+"""
+        except Exception:
+            pass
 
     cb_html = ""
     if current_batch:
@@ -223,6 +259,27 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   .ctrl-pause:hover {{ background: rgba(255,230,107,0.1); box-shadow: 0 0 28px rgba(255,230,107,0.6); }}
   .ctrl-resume {{ border-color: #00ffa8; color: #00ffa8; }}
   .control-bar {{ margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
+  .insights-grid {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr));
+    gap: 14px; margin-top: 12px;
+  }}
+  .insights-card {{
+    background: rgba(0,25,15,0.7);
+    border: 1px solid rgba(0,255,168,0.3);
+    padding: 16px;
+  }}
+  .ins-label {{ font-size: 10px; color: #65a08a; text-transform: uppercase; letter-spacing: 2px; }}
+  .ins-big {{ font-size: 34px; font-weight: 700; color: #00ffa8; margin-top: 4px; text-shadow: 0 0 12px rgba(0,255,168,0.5); }}
+  .ins-list {{ list-style:none; padding:0; margin:8px 0 0; font-size: 13px; color:#d8ffe8; }}
+  .ins-list li {{ padding: 3px 0; }}
+  .kw-cloud-label {{ font-size:12px; color:#65a08a; text-transform:uppercase; letter-spacing:2px; margin-top: 20px; }}
+  .kw-cloud {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }}
+  .kw-pill {{
+    display: inline-block; padding: 4px 12px;
+    border: 1px solid #00ffff; color: #00ffff;
+    font-size: 12px; border-radius: 0;
+    background: rgba(0,255,255,0.05);
+  }}
   .paused-banner {{
     background: rgba(255,230,107,0.1);
     border: 1px solid #ffe66b; color: #ffe66b;
@@ -337,6 +394,8 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
 {'<div class="paused-banner">⏸ ENGINE PAUSED — no credits being burned · unibox + analysis still running</div>' if perpetual_paused else ''}
 
 {cb_html}
+
+{insights_html}
 
 <h2>// recent batches</h2>
 <table>

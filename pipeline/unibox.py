@@ -104,6 +104,74 @@ async def unibox_loop():
         await asyncio.sleep(settings.INSTANTLY_SYNC_INTERVAL_MINUTES * 60)
 
 
+async def get_reply_insights() -> dict:
+    """Deep-dive analysis of who's replying — to find lookalike patterns.
+    Returns:
+      - top sources (where the repliers came from)
+      - free-email vs business breakdown
+      - top company keywords (niche clustering)
+      - role patterns
+    """
+    from sqlalchemy import func as sql_func
+    from collections import Counter as PyCounter
+    async with SessionLocal() as s:
+        responders = (await s.execute(
+            select(VerifiedLead).where(VerifiedLead.responded == True)
+        )).scalars().all()
+
+    if not responders:
+        return {"total": 0, "msg": "No replies tracked yet. Run /unibox/sync to pull recent."}
+
+    # Domain breakdown: free providers vs business
+    FREE = {"gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com","aol.com",
+            "protonmail.com","proton.me","me.com","mac.com","live.com"}
+    free_count = sum(1 for r in responders if r.email and r.email.split("@")[-1].lower() in FREE)
+    biz_count = len(responders) - free_count
+
+    # Top sources
+    sources_c = PyCounter(r.source or "?" for r in responders)
+    # Top roles
+    roles_c = PyCounter((r.role or "Unknown").strip() for r in responders)
+    # Top niche keywords from company names (basic tokenization)
+    import re
+    stop = {"the","and","of","for","to","in","on","at","by","a","an","is","with",
+            "llc","inc","co","ltd","corp","group","studio","agency","company"}
+    word_c = PyCounter()
+    for r in responders:
+        if r.company:
+            for w in re.findall(r"\b[A-Za-z]{4,20}\b", r.company.lower()):
+                if w not in stop:
+                    word_c[w] += 1
+
+    # Top company TLDs
+    tld_c = PyCounter()
+    for r in responders:
+        if r.website:
+            host = r.website.lower().replace("https://", "").replace("http://", "").split("/")[0].replace("www.", "")
+            parts = host.split(".")
+            if len(parts) >= 2:
+                tld_c["." + parts[-1]] += 1
+
+    return {
+        "total_responders": len(responders),
+        "domain_split": {
+            "free_provider": free_count,
+            "business_domain": biz_count,
+            "free_pct": round(100 * free_count / len(responders), 1),
+        },
+        "top_sources": sources_c.most_common(10),
+        "top_roles": roles_c.most_common(8),
+        "top_niche_keywords": word_c.most_common(20),
+        "top_tlds": tld_c.most_common(10),
+        "sample_responders": [
+            {"name": r.name, "email": r.email, "company": r.company,
+             "website": r.website, "source": r.source,
+             "responded_at": r.responded_at.isoformat() if r.responded_at else None}
+            for r in sorted(responders, key=lambda x: -(x.responded_at.timestamp() if x.responded_at else 0))[:20]
+        ],
+    }
+
+
 async def get_reply_stats() -> dict:
     """Return per-source reply stats for dashboard."""
     from sqlalchemy import func as sql_func, case
