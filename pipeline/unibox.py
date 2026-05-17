@@ -132,16 +132,51 @@ async def get_reply_insights() -> dict:
     sources_c = PyCounter(r.source or "?" for r in responders)
     # Top roles
     roles_c = PyCounter((r.role or "Unknown").strip() for r in responders)
-    # Top niche keywords from company names (basic tokenization)
+    # Top niche keywords from website DOMAINS (company field is unreliable text-capture).
+    # Strip TLD, split on common camelcase / hyphen / number boundaries.
     import re
-    stop = {"the","and","of","for","to","in","on","at","by","a","an","is","with",
-            "llc","inc","co","ltd","corp","group","studio","agency","company"}
+    STOP = {
+        # articles, prepositions, conjunctions
+        "the","and","of","for","to","in","on","at","by","a","an","is","with","or","but",
+        "from","this","that","not","are","was","were","been","have","has","had","do","does",
+        "did","will","would","should","could","can","may","might","must","shall","they","them",
+        "their","there","these","those","what","which","who","whom","whose","when","where","why",
+        "how","all","any","each","every","other","some","such","only","own","same","than",
+        "too","very","also","just","even","though","still","like","over","under","through",
+        # super common english
+        "high","low","big","small","large","old","new","good","best","top","high","main",
+        "people","things","time","year","years","day","days","life","work","home","way",
+        "make","made","get","got","take","took","know","knew","think","thought","see","saw",
+        "come","came","go","went","find","found","look","said","say","ask","help","want",
+        "need","try","use","used","feel","felt","right","left","first","last","next","both",
+        # business filler that's noise not signal
+        "llc","inc","corp","ltd","group","studio","agency","company","companies","co",
+        "global","world","international","national","local","online","digital","virtual",
+        "solutions","services","systems","management","consulting","center","centre",
+        "professional","experience","experiences","brand","brands","official","website",
+        "business","businesses","brand","marketing","sales","store","shop","website",
+        # geography / cities (high frequency, low signal for niche)
+        "houston","dallas","austin","chicago","seattle","boston","denver","atlanta",
+        "miami","phoenix","orlando","portland","detroit","minnesota","oklahoma",
+        "michigan","california","arizona","texas","florida","newyork","losangeles","ny","la",
+        # noise
+        "stre","explained","cone",
+    }
     word_c = PyCounter()
     for r in responders:
-        if r.company:
-            for w in re.findall(r"\b[A-Za-z]{4,20}\b", r.company.lower()):
-                if w not in stop:
-                    word_c[w] += 1
+        if not r.website: continue
+        host = r.website.lower().replace("https://","").replace("http://","").split("/")[0].replace("www.","")
+        # Strip TLD: take everything before the last dot-segment
+        parts = host.split(".")
+        if len(parts) < 2: continue
+        slug = ".".join(parts[:-1])  # keep middle dots if multi-level domain
+        # Tokenize: split on non-letters AND on lowerCamel boundaries
+        # First split on non-letter chars
+        tokens = re.findall(r"[a-z]{3,20}", slug)
+        # Then break camelCase-like sequences (these are rare in domains but safe)
+        for w in tokens:
+            if w not in STOP and not w.isnumeric():
+                word_c[w] += 1
 
     # Top company TLDs
     tld_c = PyCounter()

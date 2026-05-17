@@ -255,14 +255,27 @@ def find_role(text: str) -> str | None:
 
 
 def find_company(text: str) -> str | None:
-    for pat in [r"\b(?:founder|co-founder|cofounder|owner|ceo|president|principal)\s+(?:and\s+\w+\s+)?of\s+([A-Z][A-Za-z0-9&\.\s\-']{1,50})",
-                r"\b(?:I founded|I started|I launched|I created|I am the founder of)\s+([A-Z][A-Za-z0-9&\.\s\-']{1,50})"]:
+    """Extract company name from article text. Conservative — better to return None
+    than capture garbled chunks like 'Houston Rockets Even Though High Street...'"""
+    for pat in [r"\b(?:founder|co-founder|cofounder|owner|ceo|president|principal)\s+(?:and\s+\w+\s+)?of\s+([A-Z][A-Za-z0-9&\.\-' ]{1,60})",
+                r"\b(?:I\s+(?:founded|started|launched|created)|I\s+am\s+the\s+founder\s+of)\s+([A-Z][A-Za-z0-9&\.\-' ]{1,60})"]:
         m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            c = m.group(1).strip().rstrip(".,;")
-            c = re.split(r"\b(?:is|in|and|where|which|that|with|to|when|so|because)\b", c)[0].strip()
-            if 2 <= len(c) <= 60:
-                return c
+        if not m: continue
+        c = m.group(1).strip().rstrip(".,;:")
+        # Cut at common sentence-continuation words
+        c = re.split(r"\s+(?:where|which|that|when|so|because|but|after|before|while|though|"
+                     r"whose|whom|since|until|even|still|then|now|today|yesterday|"
+                     r"is|are|was|were|has|have|had|with|to|from|in|on|at|of|by|for|"
+                     r"about|over|under|through|across|behind|beyond|inside|outside)\s+",
+                     c, flags=re.IGNORECASE, maxsplit=1)[0].strip().rstrip(".,;:&-")
+        # Sanity checks — reject if it looks like a sentence fragment
+        words = c.split()
+        if not (1 <= len(words) <= 6): continue
+        # Reject if mostly lowercase (means we captured running prose, not a proper noun company)
+        cap_count = sum(1 for w in words if w and w[0].isupper())
+        if cap_count < max(1, len(words) // 2): continue
+        if 2 <= len(c) <= 60:
+            return c
     return None
 
 
