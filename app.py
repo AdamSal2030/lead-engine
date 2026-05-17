@@ -227,6 +227,27 @@ async def resume(authorization: str = Header(None)):
     return {"ok": True, "msg": "Resumed. Next batch will start within 60s."}
 
 
+@app.post("/purge-source/{source}")
+async def purge_source(source: str, authorization: str = Header(None)):
+    """Delete all verified leads + raw leads from a specific source.
+    Useful when a source's parser turns out to be broken (e.g. Brainz)."""
+    check_auth(authorization)
+    from sqlalchemy import delete as sql_delete
+    from db import RawLead, SeenURL
+    deleted_v = deleted_r = deleted_s = 0
+    async with SessionLocal() as s:
+        # Case-insensitive match
+        r = await s.execute(sql_delete(VerifiedLead).where(VerifiedLead.source.ilike(source)))
+        deleted_v = r.rowcount
+        r = await s.execute(sql_delete(RawLead).where(RawLead.source.ilike(source)))
+        deleted_r = r.rowcount
+        r = await s.execute(sql_delete(SeenURL).where(SeenURL.source.ilike(source)))
+        deleted_s = r.rowcount
+        await s.commit()
+    return {"ok": True, "source": source,
+            "deleted": {"verified": deleted_v, "raw": deleted_r, "seen": deleted_s}}
+
+
 @app.get("/unibox/sync")
 @app.post("/unibox/sync")
 async def trigger_unibox_sync():

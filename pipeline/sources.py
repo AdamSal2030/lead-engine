@@ -114,13 +114,12 @@ async def boldjourney_urls() -> list[str]:
 
 
 async def brainz_urls() -> list[str]:
-    """Brainz Magazine — Wix site with 400+ founder-contributor articles."""
-    text = await fetch("https://www.brainzmagazine.com/blog-posts-sitemap.xml", try_fallbacks=True)
-    if not text:
-        return []
-    urls = re.findall(r"<loc>([^<]+)</loc>", text)
-    # Only /post/ paths (skip /blog/tags/ etc.)
-    return [u for u in urls if "/post/" in u]
+    """Brainz Magazine — DISABLED.
+    Wix structure stores author info inside JS-rendered components. Our meta-tag parser
+    pulled the site name ('Brainz Magazine') as the author and extracted academic citations
+    as 'emails'. Needs a Selenium/Playwright approach to reach the real author bio.
+    Re-enable once a proper parser is built."""
+    return []
 
 
 async def founderhour_urls() -> list[str]:

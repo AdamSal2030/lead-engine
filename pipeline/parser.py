@@ -292,60 +292,9 @@ async def parse_article(url: str) -> dict | None:
         return None
     soup = BeautifulSoup(html, "lxml")
 
-    # Special case: Brainz Magazine (Wix-based, contributor articles).
-    # Author = the founder. Their name + business is in meta tags / data attrs.
+    # Brainz Magazine disabled — see sources.py:brainz_urls
     if "brainzmagazine.com" in url:
-        # Author name often in <meta property="article:author"> or <meta name="author">
-        author = None
-        for sel in ['meta[property="article:author"]',
-                    'meta[name="author"]',
-                    'meta[property="og:author"]']:
-            m = soup.select_one(sel)
-            if m and m.get("content"):
-                author = m["content"].strip()
-                break
-        if not author:
-            # Look for author in structured data
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    import json as _json
-                    data = _json.loads(script.string or "")
-                    if isinstance(data, dict):
-                        a = data.get("author")
-                        if isinstance(a, dict) and a.get("name"):
-                            author = a["name"]; break
-                        if isinstance(a, list) and a and a[0].get("name"):
-                            author = a[0]["name"]; break
-                except Exception:
-                    pass
-        if not author: return None
-        name = clean_name(f"Meet {author}")
-        if not name: return None
-
-        # External link in article body = author's business (Wix posts often link to it)
-        body_text = soup.get_text(" ", strip=True)
-        external = None
-        for a in soup.find_all("a", href=True):
-            h = a["href"].strip()
-            if not h.startswith("http"): continue
-            if any(x in h.lower() for x in ["brainzmagazine.com","facebook","instagram","linkedin",
-                                             "twitter","x.com","youtube","tiktok","wixstatic",
-                                             "wix.com","wixsite","google","apple","amazon"]):
-                continue
-            external = h.split("?")[0].split("#")[0]; break
-
-        if not external:
-            return None
-
-        return {
-            "source_url": url,
-            "source": "Brainz",
-            "name": name,
-            "website": external,
-            "role": "Contributor",
-            "company": None,
-            "article_emails": list(extract_emails(html)),
-        }
+        return None
 
     title = soup.find("h1")
     title_text = title.get_text(strip=True) if title else ""
