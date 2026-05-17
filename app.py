@@ -366,6 +366,22 @@ async def debug():
     except Exception as e:
         diag["skrapp"] = {"error": str(e)[:200]}
 
+    # 4b. MillionVerifier state
+    try:
+        from pipeline.mv_verifier import get_state as mv_state, _load_counter as _mv_load
+        await _mv_load()
+        diag["mv"] = mv_state()
+    except Exception as e:
+        diag["mv"] = {"error": str(e)[:200]}
+
+    # 4c. Reoon pool state
+    try:
+        from pipeline.reoon_pool import get_pool as _rpool
+        p = _rpool()
+        diag["reoon_pool"] = {"keys": len(p), "has_keys": p.has_keys()}
+    except Exception as e:
+        diag["reoon_pool"] = {"error": str(e)[:200]}
+
     # 5. Current loop state
     diag["loop"] = {
         "paused": _perpetual_paused,
