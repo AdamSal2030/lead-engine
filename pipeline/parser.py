@@ -268,10 +268,85 @@ def find_company(text: str) -> str | None:
 
 async def parse_article(url: str) -> dict | None:
     """Returns dict with name, website, role, company, article_emails, or None."""
+    # Special case: Authority Magazine — we already have name + company from RSS
+    # The article body is gated by Medium, so resolve company → domain via Clearbit
+    from pipeline.sources import AUTHORITY_CACHE, source_label as _src
+    if url in AUTHORITY_CACHE:
+        cached = AUTHORITY_CACHE[url]
+        from pipeline.company_resolver import resolve_to_domain
+        domain = await resolve_to_domain(cached["company"])
+        if not domain:
+            return None
+        return {
+            "source_url": url,
+            "source": "AuthorityMagazine",
+            "name": cached["name"],
+            "website": f"https://{domain}",
+            "role": "Founder",  # most Authority interviews are with founders
+            "company": cached["company"],
+            "article_emails": [],
+        }
+
     html = await fetch(url)
     if not html:
         return None
     soup = BeautifulSoup(html, "lxml")
+
+    # Special case: Brainz Magazine (Wix-based, contributor articles).
+    # Author = the founder. Their name + business is in meta tags / data attrs.
+    if "brainzmagazine.com" in url:
+        # Author name often in <meta property="article:author"> or <meta name="author">
+        author = None
+        for sel in ['meta[property="article:author"]',
+                    'meta[name="author"]',
+                    'meta[property="og:author"]']:
+            m = soup.select_one(sel)
+            if m and m.get("content"):
+                author = m["content"].strip()
+                break
+        if not author:
+            # Look for author in structured data
+            for script in soup.find_all("script", type="application/ld+json"):
+                try:
+                    import json as _json
+                    data = _json.loads(script.string or "")
+                    if isinstance(data, dict):
+                        a = data.get("author")
+                        if isinstance(a, dict) and a.get("name"):
+                            author = a["name"]; break
+                        if isinstance(a, list) and a and a[0].get("name"):
+                            author = a[0]["name"]; break
+                except Exception:
+                    pass
+        if not author: return None
+        name = clean_name(f"Meet {author}")
+        if not name: return None
+
+        # External link in article body = author's business (Wix posts often link to it)
+        body_text = soup.get_text(" ", strip=True)
+        external = None
+        for a in soup.find_all("a", href=True):
+            h = a["href"].strip()
+            if not h.startswith("http"): continue
+            if any(x in h.lower() for x in ["brainzmagazine.com","facebook","instagram","linkedin",
+                                             "twitter","x.com","youtube","tiktok","wixstatic",
+                                             "wix.com","wixsite","google","apple","amazon"]):
+                continue
+            external = h.split("?")[0].split("#")[0]; break
+
+        if not external:
+            return None
+
+        return {
+            "source_url": url,
+            "source": "Brainz",
+            "name": name,
+            "website": external,
+            "role": "Contributor",
+            "company": None,
+            "article_emails": list(extract_emails(html)),
+        }
+
     title = soup.find("h1")
     title_text = title.get_text(strip=True) if title else ""
 

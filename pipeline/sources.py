@@ -52,6 +52,55 @@ async def canvasrebel_urls() -> list[str]:
     return [u for u in urls if re.match(r"https://canvasrebel\.com/meet-[^/]+/?$", u)]
 
 
+# In-memory cache of Authority Magazine RSS items: {url: {name, company}}
+AUTHORITY_CACHE: dict[str, dict] = {}
+
+
+def _parse_authority_title(title: str) -> dict | None:
+    """Authority Magazine title pattern: '<Topic>: <Name> Of <Company> On How...'
+    Returns {name, company} or None."""
+    # Strip any '<![CDATA[ ... ]]>' wrapping
+    title = title.strip()
+    # Common patterns:
+    #   "<Topic>: First Last Of Company On <How to do X>"
+    #   "<Topic>: First Last, Founder of Company, On <...>"
+    #   "First Last Of Company On <Topic>"
+    m = re.search(r"[:—–-]\s*([A-Z][\w\.\-'À-ÿ]+(?:\s+[A-Z][\w\.\-'À-ÿ]+){1,3})\s+(?:Of|of|At|at|From|from)\s+([A-Z][\w\.\&\-' ]{1,60}?)\s+(?:On|on)\s",
+                  title)
+    if not m:
+        m = re.search(r"^([A-Z][\w\.\-'À-ÿ]+(?:\s+[A-Z][\w\.\-'À-ÿ]+){1,3})\s+(?:Of|of)\s+([A-Z][\w\.\&\-' ]{1,60}?)\s+(?:On|on)\s",
+                      title)
+    if m:
+        name = re.sub(r"\s+", " ", m.group(1).strip())
+        company = re.sub(r"\s+", " ", m.group(2).strip()).rstrip(",")
+        # Sanity check name
+        words = name.split()
+        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words):
+            return {"name": name, "company": company}
+    return None
+
+
+async def authority_magazine_urls() -> list[str]:
+    """Pull latest Authority Magazine items via Medium RSS.
+    Pre-extracts name+company from titles and caches for the parser to use."""
+    text = await fetch("https://medium.com/feed/authority-magazine", try_fallbacks=True, timeout=20)
+    if not text:
+        return []
+    # Parse items
+    items = re.findall(r"<item>(.*?)</item>", text, re.DOTALL)
+    urls = []
+    for item in items:
+        title_m = re.search(r"<title><!\[CDATA\[(.*?)\]\]></title>", item, re.DOTALL)
+        link_m = re.search(r"<link>([^<]+)</link>", item)
+        if not (title_m and link_m): continue
+        title, link = title_m.group(1), link_m.group(1).strip()
+        parsed = _parse_authority_title(title)
+        if not parsed: continue
+        AUTHORITY_CACHE[link] = parsed
+        urls.append(link)
+    return urls
+
+
 async def boldjourney_urls() -> list[str]:
     text = await fetch("https://boldjourney.com/news-sitemap.xml", try_fallbacks=True)
     if not text:
@@ -62,6 +111,16 @@ async def boldjourney_urls() -> list[str]:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
     return [u for u in urls if re.match(r"https://boldjourney\.com/meet-[^/]+/?$", u)]
+
+
+async def brainz_urls() -> list[str]:
+    """Brainz Magazine — Wix site with 400+ founder-contributor articles."""
+    text = await fetch("https://www.brainzmagazine.com/blog-posts-sitemap.xml", try_fallbacks=True)
+    if not text:
+        return []
+    urls = re.findall(r"<loc>([^<]+)</loc>", text)
+    # Only /post/ paths (skip /blog/tags/ etc.)
+    return [u for u in urls if "/post/" in u]
 
 
 async def founderhour_urls() -> list[str]:
@@ -138,6 +197,8 @@ async def collect_all_urls() -> dict[str, list[str]]:
     out["boldjourney"] = await boldjourney_urls()
     out["valiantceo"] = await valiantceo_urls()
     out["founderhour"] = await founderhour_urls()
+    out["authority_magazine"] = await authority_magazine_urls()
+    out["brainz_magazine"] = await brainz_urls()
     for site in VOYAGE_SITES:
         out[site.replace(".com", "")] = await voyage_urls(site)
     for site in PR_SITES:
@@ -157,6 +218,8 @@ def source_label(url: str) -> str:
     if "ceomonthly" in url: return "CEOMonthly"
     if "thefounderhour" in url: return "TheFounderHour"
     if "americanentrepreneurship" in url: return "AmericanEntrepreneurship"
+    if "medium.com/authority-magazine" in url or "authority-magazine" in url: return "AuthorityMagazine"
+    if "brainzmagazine" in url: return "Brainz"
     for s in VOYAGE_SITES:
         if s in url:
             return s.replace(".com", "").replace("voyage", "Voyage").title()

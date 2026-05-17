@@ -117,6 +117,9 @@ async def cleanup_zombie_batches():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _perpetual_task
+    # Import modules that declare new tables so init_db() picks them up
+    import pipeline.finder  # SkrappCache
+    import pipeline.company_resolver  # CompanyDomainCache
     await init_db()
     # Load persistent Reoon call counter so dashboard shows correct total before any new calls
     from pipeline.verifier import _load_counter
