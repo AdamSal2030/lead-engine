@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"
     REOON_IPS: str = "104.26.8.96,104.26.9.96,172.67.75.34"
 
+    # Claude API — powers smart article parsing + niche/hook extraction
+    ANTHROPIC_API_KEY: str = ""
+    CLAUDE_PARSE_ENABLED: bool = True   # use Claude as fallback when regex parser fails
+
+    # Hunter.io — Layer 5 email finder (after Skrapp)
+    HUNTER_API_KEY: str = ""
+    HUNTER_ENABLED: bool = True
+
     # API auth (optional — protects /run endpoint)
     API_TOKEN: str = ""
 

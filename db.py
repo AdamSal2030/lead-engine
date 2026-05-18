@@ -49,6 +49,8 @@ class VerifiedLead(Base):
     reoon_score = Column(Integer)
     is_catch_all = Column(Boolean)
     tier = Column(String(2))  # A only — Tier B is filtered out
+    niche = Column(String(80))   # e.g. "Marketing Agency", "Coaching", "SaaS / Tech"
+    hook = Column(Text)          # Claude-generated personalisation icebreaker sentence
     batch_id = Column(Integer, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     # Reply tracking via Instantly unibox sync
@@ -92,6 +94,9 @@ async def init_db():
         # responded / responded_at columns added for Instantly unibox reply tracking
         ("verified_leads", "responded", "ALTER TABLE verified_leads ADD COLUMN responded BOOLEAN DEFAULT 0"),
         ("verified_leads", "responded_at", "ALTER TABLE verified_leads ADD COLUMN responded_at DATETIME"),
+        # niche + hook added for multi-niche segmentation and personalisation
+        ("verified_leads", "niche", "ALTER TABLE verified_leads ADD COLUMN niche VARCHAR(80)"),
+        ("verified_leads", "hook", "ALTER TABLE verified_leads ADD COLUMN hook TEXT"),
     ]
     async with engine.begin() as conn:
         for table, col, ddl in migrations:

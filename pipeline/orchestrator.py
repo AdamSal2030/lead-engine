@@ -101,6 +101,13 @@ async def save_verified(verified: dict, batch_id: int) -> bool:
     parts = verified["name"].strip().split()
     first = parts[0] if parts else ""
     last = parts[-1] if len(parts) > 1 else ""
+
+    # Niche: carry from parsed result; classify now if missing
+    niche = verified.get("niche") or ""
+    if not niche:
+        from pipeline.niche import classify
+        niche = classify(verified.get("role"), verified.get("company"), None, verified.get("website"))
+
     async with SessionLocal() as s:
         existing = await s.execute(
             select(VerifiedLead).where(VerifiedLead.email == verified["verified_email"].lower())
@@ -121,6 +128,8 @@ async def save_verified(verified: dict, batch_id: int) -> bool:
             reoon_score=v.get("score"),
             is_catch_all=v.get("is_catch_all"),
             tier=v.get("tier"),
+            niche=niche,
+            hook=verified.get("hook") or "",
             batch_id=batch_id,
         ))
         try:
@@ -170,23 +179,40 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
                 if has_personal:
                     need_skrapp = False
 
-            # L4: Skrapp finder, only if needed
+            # Extract domain once for L4 + L5
+            _words = parsed["name"].split()
+            _first = _words[0] if _words else ""
+            _last = _words[-1] if len(_words) > 1 else ""
+            try:
+                _pu = urllib.parse.urlparse(
+                    parsed["website"] if parsed["website"].startswith("http")
+                    else "https://" + parsed["website"]
+                )
+                _domain = _pu.netloc.replace("www.", "").lower()
+            except Exception:
+                _domain = ""
+
+            # L4: Skrapp finder
             if need_skrapp and skrapp_finder.get_state().get("enabled"):
-                # Extract first/last from name, domain from website
-                words = parsed["name"].split()
-                if len(words) >= 2:
-                    first, last = words[0], words[-1]
+                if len(_words) >= 2 and _domain:
                     try:
-                        parsed_url = urllib.parse.urlparse(
-                            parsed["website"] if parsed["website"].startswith("http")
-                            else "https://" + parsed["website"]
-                        )
-                        domain = parsed_url.netloc.replace("www.", "").lower()
-                        skrapp_res = await skrapp_finder.find_email(first, last, domain)
+                        skrapp_res = await skrapp_finder.find_email(_first, _last, _domain)
                         if skrapp_res and skrapp_res.get("email"):
                             combined.insert(0, skrapp_res["email"])
+                            need_skrapp = False  # got one — skip Hunter
                     except Exception:
                         pass
+
+            # L5: Hunter.io — fires when Skrapp also found nothing
+            if need_skrapp and len(_words) >= 2 and _domain:
+                try:
+                    from pipeline.hunter import find_email as hunter_find, get_state as hunter_state
+                    if hunter_state().get("enabled"):
+                        hunter_res = await hunter_find(_first, _last, _domain)
+                        if hunter_res and hunter_res.get("email"):
+                            combined.insert(0, hunter_res["email"])
+                except Exception:
+                    pass
 
             if not combined:
                 await mark_seen(url, source, "no_emails")

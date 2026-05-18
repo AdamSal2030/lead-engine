@@ -280,63 +280,98 @@ def find_company(text: str) -> str | None:
 
 
 async def parse_article(url: str) -> dict | None:
-    """Returns dict with name, website, role, company, article_emails, or None."""
-    # Special case: Authority Magazine — we already have name + company from RSS
-    # The article body is gated by Medium, so resolve company → domain via Clearbit
+    """Returns dict with name, website, role, company, niche, hook, article_emails, or None.
+
+    Extraction layers:
+      1. Authority Magazine: RSS-cached name + Clearbit domain resolution
+      2. Regex: H1 name + website scrape (fast, free, no API)
+      3. Claude Haiku fallback: fires when regex can't find name or website
+         — also extracts niche + personalisation hook
+    """
     from pipeline.sources import AUTHORITY_CACHE, source_label as _src
+
+    # --- Authority Magazine special path ---
     if url in AUTHORITY_CACHE:
         cached = AUTHORITY_CACHE[url]
         from pipeline.company_resolver import resolve_to_domain
         domain = await resolve_to_domain(cached["company"])
         if not domain:
             return None
+        from pipeline.niche import classify
         return {
             "source_url": url,
             "source": "AuthorityMagazine",
             "name": cached["name"],
             "website": f"https://{domain}",
-            "role": "Founder",  # most Authority interviews are with founders
+            "role": "Founder",
             "company": cached["company"],
+            "niche": classify("Founder", cached["company"], None, domain),
+            "hook": "",
             "article_emails": [],
         }
 
     html = await fetch(url)
     if not html:
         return None
-    soup = BeautifulSoup(html, "lxml")
 
-    # Brainz Magazine disabled — see sources.py:brainz_urls
     if "brainzmagazine.com" in url:
         return None
 
+    soup = BeautifulSoup(html, "lxml")
     title = soup.find("h1")
     title_text = title.get_text(strip=True) if title else ""
 
     name = clean_name(title_text)
-    if not name:
-        return None
-
     body = soup.find("article") or soup.find(class_=re.compile("entry-content|post-content"))
-    if not body:
+    body_text = body.get_text(" ", strip=True) if body else ""
+    website = find_website(body, body_text, url) if body else None
+
+    # --- Claude fallback when regex couldn't extract name or website ---
+    if (not name or not website) and html:
+        from pipeline.claude_parser import parse_with_claude
+        claude_result = await parse_with_claude(url, html)
+        if claude_result:
+            article_emails = extract_emails(str(body)) if body else set()
+            from pipeline.niche import classify
+            niche = claude_result.get("niche") or classify(
+                claude_result.get("role"), claude_result.get("company"),
+                None, claude_result.get("website"),
+            )
+            return {
+                "source_url": url,
+                "source": source_label(url),
+                "name": claude_result["name"],
+                "website": claude_result["website"],
+                "role": claude_result.get("role", "Founder"),
+                "company": claude_result.get("company", ""),
+                "niche": niche,
+                "hook": claude_result.get("hook", ""),
+                "article_emails": sorted(article_emails),
+                "_parsed_by": "claude",
+            }
+        return None  # both regex and Claude failed
+
+    if not name or not body or not website:
         return None
 
-    body_text = body.get_text(" ", strip=True)
-    website = find_website(body, body_text, url)
-    if not website:
-        return None
-
-    # NEW: extract emails directly from the article body HTML
-    # Many founders drop their personal gmail/yahoo in interview answers
     article_emails = extract_emails(str(body))
+    role = find_role(body_text)
+    company = find_company(body_text)
+
+    from pipeline.niche import classify
+    niche = classify(role, company, None, website)
 
     return {
         "source_url": url,
         "source": source_label(url),
         "name": name,
         "website": website,
-        "role": find_role(body_text),
-        "company": find_company(body_text),
+        "role": role,
+        "company": company,
+        "niche": niche,
+        "hook": "",          # hook only available from Claude path
         "article_emails": sorted(article_emails),
+        "_parsed_by": "regex",
     }
 
 

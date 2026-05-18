@@ -243,8 +243,17 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
     return all_urls
 
 
-PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com",
-            "americanentrepreneurship.com", "ceoblognation.com"]
+PR_SITES = [
+    # Original interview/PR sites (founders, CEOs)
+    "ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com",
+    "americanentrepreneurship.com", "ceoblognation.com",
+    # Broader entrepreneur + niche-professional interview sites
+    "addicted2success.com",       # entrepreneurs, coaches, mindset
+    "thriveglobal.com",           # wellness, coaches, executives
+    "beingentrepreneur.com",      # SMB founders across niches
+    "gritdaily.com",              # startups, agencies, creatives
+    "influencive.com",            # personal brand, coaching, marketing
+]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
@@ -280,6 +289,11 @@ def source_label(url: str) -> str:
     if "thefounderhour" in url: return "TheFounderHour"
     if "americanentrepreneurship" in url: return "AmericanEntrepreneurship"
     if "ideamensch" in url: return "IdeaMensch"
+    if "addicted2success" in url: return "Addicted2Success"
+    if "thriveglobal" in url: return "ThriveGlobal"
+    if "beingentrepreneur" in url: return "BeingEntrepreneur"
+    if "gritdaily" in url: return "GritDaily"
+    if "influencive" in url: return "Influencive"
     if "medium.com/authority-magazine" in url or "authority-magazine" in url: return "AuthorityMagazine"
     if "brainzmagazine" in url: return "Brainz"
     for s in SHOUTOUT_SITES:
