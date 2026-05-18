@@ -42,8 +42,9 @@ class Settings(BaseSettings):
 
     # Batch persistence — keep running until target hit
     PARTIAL_BATCHES: bool = False    # False = wait for new URLs; True = finish at pool exhaustion
-    BATCH_MAX_HOURS: int = 72        # safety net: deliver partial after this much wall-time
+    BATCH_MAX_HOURS: int = 6         # safety net: deliver partial after this much wall-time
     RETRY_SITEMAP_SECONDS: int = 1800  # if pool dries mid-batch, refetch sitemaps after this
+    MAX_WAIT_ITERATIONS: int = 3     # break out after N × RETRY_SITEMAP_SECONDS of exhaustion
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500

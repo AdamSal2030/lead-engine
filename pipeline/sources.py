@@ -148,12 +148,23 @@ async def valiantceo_urls() -> list[str]:
 
 
 VOYAGE_SITES = [
+    # Original 20
     "voyagela.com", "voyageatl.com", "voyagemia.com", "voyagedallas.com",
     "voyagehouston.com", "voyageraleigh.com", "voyagestl.com", "voyagekc.com",
     "voyageaustin.com", "voyagechicago.com", "voyageohio.com", "voyageminnesota.com",
     "voyageutah.com", "voyagebaltimore.com", "voyagecharlotte.com",
     "voyagevirginia.com", "voyagewisconsin.com", "voyagewashington.com",
     "voyagealabama.com", "voyagemichigan.com",
+    # Additional Voyage network cities
+    "voyagephoenix.com", "voyagedenver.com", "voyagesf.com", "voyagerichmond.com",
+    "voyageindy.com", "voyagesd.com", "voyagememphis.com", "voyagephilly.com",
+    "voyagenashville.com", "voyageportland.com", "voyageseattle.com",
+]
+
+# ShoutOut interview sites — same CMS/network as Voyage, direct slugs (no date prefix)
+SHOUTOUT_SITES = [
+    "shoutoutla.com", "shoutoutatl.com", "shoutoutdfw.com",
+    "shoutoutsocal.com", "shoutoutnorcal.com",
 ]
 
 
@@ -164,6 +175,53 @@ async def voyage_urls(site: str) -> list[str]:
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
     pat = re.compile(rf"https://{re.escape(site)}/\d{{4}}/\d{{2}}/\d{{2}}/[^/]+/?$")
     return [u for u in urls if pat.match(u) and u.rstrip("/").split("/")[-1].count("-") >= 5]
+
+
+async def shoutout_urls(site: str) -> list[str]:
+    """ShoutOut interview sites — same network as Voyage but no date prefix in URL.
+    Pattern: https://shoutoutla.com/meet-first-last-of-company/"""
+    text = await fetch(f"https://{site}/post-sitemap.xml", try_fallbacks=True)
+    if not text:
+        text = await fetch(f"https://{site}/news-sitemap.xml", try_fallbacks=True)
+    if not text:
+        return []
+    urls = re.findall(r"<loc>([^<]+)</loc>", text)
+    out = []
+    for u in urls:
+        slug = u.rstrip("/").split("/")[-1]
+        if slug.count("-") < 4:
+            continue
+        # Direct slug (ShoutOut style): site.com/meet-slug/
+        if re.match(rf"https://{re.escape(site)}/[^/]+/?$", u):
+            out.append(u)
+        # Date-based (in case some ShoutOut sites use Voyage date format)
+        elif re.match(rf"https://{re.escape(site)}/\d{{4}}/\d{{2}}/\d{{2}}/[^/]+/?$", u):
+            out.append(u)
+    return out
+
+
+async def ideamensch_urls() -> list[str]:
+    """IdeaMensch founder interviews. Thousands of interviews — URL: ideamensch.com/[slug]/
+    Each page has a clean H1 with the founder's name and a website link."""
+    all_urls = []
+    for n in range(1, 30):
+        text = await fetch(f"https://ideamensch.com/post-sitemap{n}.xml", try_fallbacks=True)
+        if not text:
+            break
+        urls = re.findall(r"<loc>([^<]+)</loc>", text)
+        if not urls:
+            break
+        filtered = [
+            u for u in urls
+            if re.match(r"https://ideamensch\.com/[a-z0-9][a-z0-9\-]+/?$", u)
+            and not any(x in u for x in ["/category/", "/tag/", "/page/", "/author/", "/about"])
+            and 1 <= u.rstrip("/").split("/")[-1].count("-") <= 5
+        ]
+        all_urls.extend(filtered)
+        # Stop if a sitemap page returns 0 matching URLs (hit the end)
+        if not filtered and n > 2:
+            break
+    return all_urls
 
 
 async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
@@ -186,7 +244,7 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
 
 
 PR_SITES = ["ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com",
-            "americanentrepreneurship.com"]
+            "americanentrepreneurship.com", "ceoblognation.com"]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
@@ -198,8 +256,11 @@ async def collect_all_urls() -> dict[str, list[str]]:
     out["founderhour"] = await founderhour_urls()
     out["authority_magazine"] = await authority_magazine_urls()
     out["brainz_magazine"] = await brainz_urls()
+    out["ideamensch"] = await ideamensch_urls()
     for site in VOYAGE_SITES:
         out[site.replace(".com", "")] = await voyage_urls(site)
+    for site in SHOUTOUT_SITES:
+        out[site.replace(".com", "")] = await shoutout_urls(site)
     for site in PR_SITES:
         out[site.replace(".com", "")] = await wordpress_sitemap_urls(site)
     total = sum(len(v) for v in out.values())
@@ -215,10 +276,15 @@ def source_label(url: str) -> str:
     if "disruptmagazine" in url: return "DisruptMagazine"
     if "valiantceo" in url: return "ValiantCEO"
     if "ceomonthly" in url: return "CEOMonthly"
+    if "ceoblognation" in url: return "CEOBlogNation"
     if "thefounderhour" in url: return "TheFounderHour"
     if "americanentrepreneurship" in url: return "AmericanEntrepreneurship"
+    if "ideamensch" in url: return "IdeaMensch"
     if "medium.com/authority-magazine" in url or "authority-magazine" in url: return "AuthorityMagazine"
     if "brainzmagazine" in url: return "Brainz"
+    for s in SHOUTOUT_SITES:
+        if s in url:
+            return s.replace(".com", "").replace("shoutout", "ShoutOut").title()
     for s in VOYAGE_SITES:
         if s in url:
             return s.replace(".com", "").replace("voyage", "Voyage").title()

@@ -244,6 +244,7 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
             verify_tasks: list[asyncio.Task] = []
             wait_iterations = 0
             max_wall_seconds = settings.BATCH_MAX_HOURS * 3600
+            _exhausted = False
 
             async def verify_and_save(raw: dict):
                 async with sem_verify:
@@ -271,7 +272,7 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                 log.info(f"  outer iter {wait_iterations + 1}: {len(unseen)} unseen URLs available")
 
                 if not unseen:
-                    # Try retrying URLs that previously failed (no_emails / no_parse / error)
+                    # Try retrying URLs that previously failed (no_emails / error)
                     # — gives them another chance with our updated parser + UAs
                     if wait_iterations == 0:
                         log.info("Pool exhausted on first pass. Clearing stuck-seen URLs to retry them...")
@@ -283,11 +284,21 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                     if not unseen:
                         if settings.PARTIAL_BATCHES:
                             log.info("Pool exhausted and PARTIAL_BATCHES=True. Finishing.")
+                            _exhausted = True
                             break
                         wait_iterations += 1
+                        # After MAX_WAIT_ITERATIONS, deliver partial and let perpetual loop sleep
+                        if wait_iterations > settings.MAX_WAIT_ITERATIONS:
+                            log.warning(
+                                f"Sources exhausted after {wait_iterations} retries "
+                                f"({wait_iterations * settings.RETRY_SITEMAP_SECONDS // 60}min). "
+                                f"Delivering partial batch and backing off."
+                            )
+                            _exhausted = True
+                            break
                         log.info(f"Sources exhausted. Waiting {settings.RETRY_SITEMAP_SECONDS}s. "
-                                 f"verified={verified_count}/{target}")
-                        _current_batch["status_msg"] = f"Waiting for new URLs (iter {wait_iterations})"
+                                 f"verified={verified_count}/{target} (iter {wait_iterations}/{settings.MAX_WAIT_ITERATIONS})")
+                        _current_batch["status_msg"] = f"Waiting for new URLs (iter {wait_iterations}/{settings.MAX_WAIT_ITERATIONS})"
                         await asyncio.sleep(settings.RETRY_SITEMAP_SECONDS)
                         continue
 
@@ -339,7 +350,8 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                 await s.commit()
 
             _current_batch["status"] = "completed"
-            return {"ok": True, "batch_id": batch_id, "verified": final_count, "csv": csv_path}
+            msg = "No unseen URLs — sources exhausted" if _exhausted else ""
+            return {"ok": True, "batch_id": batch_id, "verified": final_count, "csv": csv_path, "msg": msg}
 
         except Exception as e:
             log.exception("Batch failed")
