@@ -56,6 +56,9 @@ class VerifiedLead(Base):
     # Reply tracking via Instantly unibox sync
     responded = Column(Boolean, default=False, index=True)
     responded_at = Column(DateTime)
+    # Bounce tracking via Instantly unibox sync
+    bounced = Column(Boolean, default=False, index=True)
+    bounced_at = Column(DateTime)
 
 
 class Counter(Base):
@@ -63,6 +66,34 @@ class Counter(Base):
     __tablename__ = "counters"
     key = Column(String(50), primary_key=True)
     value = Column(Integer, default=0, nullable=False)
+
+
+class SourceWeight(Base):
+    """Dynamic per-source quality weights set by the intelligence engine.
+    weight > 1.0 → process more from this source first
+    weight < 1.0 → deprioritise (still scraped, just later in queue)
+    """
+    __tablename__ = "source_weights"
+    source = Column(String(100), primary_key=True)
+    weight = Column(Float, default=1.0, nullable=False)
+    reason = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class IntelligenceReport(Base):
+    """Stores each intelligence cycle's analysis and recommendations."""
+    __tablename__ = "intelligence_reports"
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    cycle = Column(Integer, default=0)
+    niche_metrics = Column(Text)    # JSON: {niche → {total, bounced, replied, …}}
+    source_metrics = Column(Text)   # JSON: {source → {total, bounced, replied, …}}
+    expand_niches = Column(Text)    # JSON list of niches to grow
+    reduce_niches = Column(Text)    # JSON list to deprioritise
+    test_niches = Column(Text)      # JSON list of new niches to try
+    source_weights = Column(Text)   # JSON: {source → weight float}
+    narrative = Column(Text)        # Claude's full plain-English analysis
+    top_insight = Column(Text)      # Single most important finding
 
 
 class Batch(Base):
@@ -97,6 +128,9 @@ async def init_db():
         # niche + hook added for multi-niche segmentation and personalisation
         ("verified_leads", "niche", "ALTER TABLE verified_leads ADD COLUMN niche VARCHAR(80)"),
         ("verified_leads", "hook", "ALTER TABLE verified_leads ADD COLUMN hook TEXT"),
+        # bounce tracking — synced from Instantly
+        ("verified_leads", "bounced", "ALTER TABLE verified_leads ADD COLUMN bounced BOOLEAN DEFAULT 0"),
+        ("verified_leads", "bounced_at", "ALTER TABLE verified_leads ADD COLUMN bounced_at DATETIME"),
     ]
     async with engine.begin() as conn:
         for table, col, ddl in migrations:

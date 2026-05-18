@@ -27,6 +27,7 @@ log = logging.getLogger("app")
 # Perpetual-loop control
 _perpetual_task: asyncio.Task | None = None
 _unibox_task: asyncio.Task | None = None
+_intelligence_task: asyncio.Task | None = None
 _perpetual_paused = False
 _last_exhausted_notice: datetime | None = None
 _loop_state = {"current_target": 0, "completed_batches": 0}
@@ -134,18 +135,27 @@ async def lifespan(app: FastAPI):
         _perpetual_task = asyncio.create_task(perpetual_loop())
         log.info("Perpetual loop scheduled.")
 
-    # Unibox sync loop (Instantly reply tracking)
+    # Unibox sync loop (Instantly reply + bounce tracking)
     if settings.INSTANTLY_API_KEY:
         global _unibox_task
         from pipeline.unibox import unibox_loop
         _unibox_task = asyncio.create_task(unibox_loop())
         log.info("Unibox sync loop scheduled.")
 
+    # Intelligence loop — runs every 24h, requires ANTHROPIC_API_KEY
+    if settings.ANTHROPIC_API_KEY:
+        global _intelligence_task
+        from pipeline.intelligence import intelligence_loop
+        _intelligence_task = asyncio.create_task(intelligence_loop(run_every_hours=24))
+        log.info("Intelligence loop scheduled (first run in 2h).")
+
     yield
     if _perpetual_task and not _perpetual_task.done():
         _perpetual_task.cancel()
     if _unibox_task and not _unibox_task.done():
         _unibox_task.cancel()
+    if _intelligence_task and not _intelligence_task.done():
+        _intelligence_task.cancel()
 
 
 app = FastAPI(title="Lead Engine", lifespan=lifespan)
@@ -263,6 +273,28 @@ async def purge_source(source: str, authorization: str = Header(None)):
         await s.commit()
     return {"ok": True, "source": source,
             "deleted": {"verified": deleted_v, "raw": deleted_r, "seen": deleted_s}}
+
+
+@app.get("/intelligence", dependencies=[Depends(require_dash_login)])
+async def intelligence_report():
+    """Return the most recent intelligence analysis report."""
+    from pipeline.intelligence import get_last_report
+    report = await get_last_report()
+    if not report:
+        return {"ok": False, "msg": "No intelligence report yet. Run POST /intelligence/run to generate one."}
+    return {"ok": True, "report": report}
+
+
+@app.post("/intelligence/run", dependencies=[Depends(require_dash_login)])
+async def run_intelligence(background_tasks: BackgroundTasks):
+    """Trigger an immediate intelligence cycle (runs in background)."""
+    from pipeline.intelligence import run_cycle
+
+    async def _run():
+        await run_cycle()
+
+    background_tasks.add_task(_run)
+    return {"ok": True, "msg": "Intelligence cycle started. Check /intelligence in ~30s for results."}
 
 
 @app.get("/unibox/sync")

@@ -89,18 +89,22 @@ async def fetch_replies(limit_pages: int = 5) -> int:
 
 
 async def unibox_loop():
-    """Background task: poll unibox periodically for replies."""
+    """Background task: poll unibox periodically for replies AND bounces."""
     if not settings.INSTANTLY_API_KEY:
         log.info("Unibox sync disabled (no INSTANTLY_API_KEY)")
         return
     log.info(f"Unibox sync loop started (every {settings.INSTANTLY_SYNC_INTERVAL_MINUTES}m)")
-    # First sync after 60s grace period (let app finish booting)
     await asyncio.sleep(60)
     while True:
         try:
-            await fetch_replies(limit_pages=5)
-        except Exception as e:
-            log.exception(f"unibox_loop iteration failed: {e}")
+            replies = await fetch_replies(limit_pages=5)
+            # Sync bounces from Instantly alongside replies
+            from pipeline.bounce_sync import fetch_bounces
+            bounces = await fetch_bounces(limit_pages=5)
+            if replies or bounces:
+                log.info(f"Unibox sync: +{replies} replies, +{bounces} bounces")
+        except Exception:
+            log.exception("unibox_loop iteration failed")
         await asyncio.sleep(settings.INSTANTLY_SYNC_INTERVAL_MINUTES * 60)
 
 

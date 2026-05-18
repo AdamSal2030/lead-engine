@@ -33,12 +33,14 @@ async def is_running() -> bool:
 
 async def get_unseen_urls(all_by_source: dict[str, list[str]],
                            retry_stuck: bool = False) -> list[tuple[str, str]]:
-    """Filter out URLs we've already processed.
-    If retry_stuck=True, also include URLs marked 'no_emails' or 'no_parse' or 'error'
-    (gives them another shot in case parser/network improved)."""
+    """Filter out already-processed URLs and return remainder in quality-weighted order.
+
+    URLs from high-quality sources (per intelligence engine weights) are placed
+    earlier in the queue so the batch hits its target with better leads first.
+    Same-weight sources are randomised within their tier.
+    """
     async with SessionLocal() as s:
         if retry_stuck:
-            # Only treat 'parsed' (successful) URLs as truly seen
             result = await s.execute(select(SeenURL.url).where(SeenURL.status == "parsed"))
         else:
             result = await s.execute(select(SeenURL.url))
@@ -49,7 +51,16 @@ async def get_unseen_urls(all_by_source: dict[str, list[str]],
         for u in urls:
             if u not in seen:
                 out.append((u, source))
-    random.shuffle(out)
+
+    # Load source weights set by the intelligence engine (default 1.0)
+    try:
+        from pipeline.intelligence import get_source_weights
+        weights = await get_source_weights()
+    except Exception:
+        weights = {}
+
+    # Sort: highest weight first, randomise within same-weight tier
+    out.sort(key=lambda item: (-weights.get(item[1], 1.0), random.random()))
     return out
 
 
