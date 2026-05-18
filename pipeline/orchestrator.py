@@ -64,14 +64,31 @@ async def get_unseen_urls(all_by_source: dict[str, list[str]],
     return out
 
 
-async def clear_stuck_seen() -> int:
-    """Remove SeenURL rows marked as 'no_emails' or 'error' (TRANSIENT failures) so they get retried.
-    DOES NOT clear 'no_parse' — those URLs were correctly rejected as non-founder content
-    (article titles, question prompts, roundups). Retrying them just burns scrape cycles."""
+async def clear_stuck_seen(include_no_parse: bool = False) -> int:
+    """Remove transiently-failed SeenURL rows so they get retried.
+
+    Always clears: no_emails, error
+    include_no_parse=True: also clears no_parse — use when Claude parser is
+    available since it can successfully extract from articles the regex missed.
+    """
+    from sqlalchemy import delete
+    statuses = ["no_emails", "error"]
+    if include_no_parse:
+        statuses.append("no_parse")
+    async with SessionLocal() as s:
+        result = await s.execute(
+            delete(SeenURL).where(SeenURL.status.in_(statuses))
+        )
+        await s.commit()
+        return result.rowcount
+
+
+async def clear_no_parse_seen() -> int:
+    """Clear only no_parse entries — gives Claude a shot at previously regex-failed URLs."""
     from sqlalchemy import delete
     async with SessionLocal() as s:
         result = await s.execute(
-            delete(SeenURL).where(SeenURL.status.in_(["no_emails", "error"]))
+            delete(SeenURL).where(SeenURL.status == "no_parse")
         )
         await s.commit()
         return result.rowcount

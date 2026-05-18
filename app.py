@@ -131,6 +131,15 @@ async def lifespan(app: FastAPI):
     from pipeline.mv_verifier import _load_counter as _mv_load
     await _mv_load()
     await cleanup_zombie_batches()
+
+    # If Claude parser is configured, previously no_parse URLs can now be re-attempted.
+    # Clear them on startup so the first batch gets a much larger fresh URL pool.
+    if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
+        from pipeline.orchestrator import clear_no_parse_seen
+        cleared = await clear_no_parse_seen()
+        if cleared:
+            log.info(f"Claude parser active — cleared {cleared} no_parse URLs for retry.")
+
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
         log.info("Perpetual loop scheduled.")
@@ -325,11 +334,22 @@ async def unibox_insights():
 @app.get("/retry-stuck")
 @app.post("/retry-stuck")
 async def retry_stuck():
-    """Clear URLs marked as 'no_emails' / 'no_parse' / 'error' so they get retried.
-    Open endpoint (no auth) so you can hit it from a browser."""
+    """Clear no_emails + error URLs so they get retried on the next batch."""
     from pipeline.orchestrator import clear_stuck_seen
-    cleared = await clear_stuck_seen()
-    return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} stuck URLs. They'll be reprocessed in the next batch iteration."}
+    cleared = await clear_stuck_seen(include_no_parse=False)
+    return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} stuck URLs (no_emails + error). They'll be reprocessed next batch."}
+
+
+@app.get("/retry-no-parse")
+@app.post("/retry-no-parse")
+async def retry_no_parse():
+    """Clear no_parse URLs so Claude parser can attempt them on the next batch.
+    Only useful when ANTHROPIC_API_KEY is set. Open endpoint — call from browser."""
+    if not settings.ANTHROPIC_API_KEY:
+        return {"ok": False, "msg": "ANTHROPIC_API_KEY not set — Claude parser inactive. Set the key first."}
+    from pipeline.orchestrator import clear_no_parse_seen
+    cleared = await clear_no_parse_seen()
+    return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} no_parse URLs. Claude will retry them in the next batch."}
 
 
 @app.get("/health")
