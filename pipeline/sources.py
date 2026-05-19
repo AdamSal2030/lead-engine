@@ -159,6 +159,8 @@ VOYAGE_SITES = [
     "voyagephoenix.com", "voyagedenver.com", "voyagesf.com", "voyagerichmond.com",
     "voyageindy.com", "voyagesd.com", "voyagememphis.com", "voyagephilly.com",
     "voyagenashville.com", "voyageportland.com", "voyageseattle.com",
+    # New York
+    "voyageny.com",
 ]
 
 # ShoutOut interview sites — same CMS/network as Voyage, direct slugs (no date prefix)
@@ -253,6 +255,31 @@ PR_SITES = [
     "beingentrepreneur.com",      # SMB founders across niches
     "gritdaily.com",              # startups, agencies, creatives
     "influencive.com",            # personal brand, coaching, marketing
+    # NewsAnchored network — regional business/entrepreneur interview sites
+    "nyweekly.com",               # New York entrepreneurs
+    "lawire.com",                 # Los Angeles founders
+    "kivodaily.com",              # general founder interviews
+    "usinsider.com",              # US business founders
+    "usbusinessnews.com",         # US business leaders
+    "worldreporter.com",          # global entrepreneurs
+    "marketdaily.com",            # market/business founders
+    "economicinsider.com",        # economic/business leaders
+    "portlandnews.com",           # Portland entrepreneurs
+    "miamiwire.com",              # Miami founders
+    "nywire.com",                 # New York founders
+    "atlwire.com",                # Atlanta founders
+    "texastoday.com",             # Texas entrepreneurs
+    "sanfranciscopost.com",       # SF founders
+    "cagazette.com",              # California entrepreneurs
+    "californiaobserver.com",     # California founders
+    "thechicagojournal.com",      # Chicago entrepreneurs
+    "womensjournal.com",          # women entrepreneurs
+    "blknews.com",                # Black entrepreneurs/founders
+    "influencerdaily.com",        # influencers, creators, coaches
+    "artistweekly.com",           # creative entrepreneurs
+    "usreporter.com",             # US founders/leaders
+    "theamericannews.com",        # American entrepreneurs
+    "realestatetoday.com",        # real estate entrepreneurs
 ]
 
 
@@ -296,6 +323,31 @@ def source_label(url: str) -> str:
     if "influencive" in url: return "Influencive"
     if "medium.com/authority-magazine" in url or "authority-magazine" in url: return "AuthorityMagazine"
     if "brainzmagazine" in url: return "Brainz"
+    # NewsAnchored network
+    if "nyweekly" in url: return "NYWeekly"
+    if "lawire" in url: return "LAWire"
+    if "kivodaily" in url: return "KivoDaily"
+    if "usinsider" in url: return "USInsider"
+    if "usbusinessnews" in url: return "USBusinessNews"
+    if "worldreporter" in url: return "WorldReporter"
+    if "marketdaily" in url: return "MarketDaily"
+    if "economicinsider" in url: return "EconomicInsider"
+    if "portlandnews" in url: return "PortlandNews"
+    if "miamiwire" in url: return "MiamiWire"
+    if "nywire" in url: return "NYWire"
+    if "atlwire" in url: return "ATLWire"
+    if "texastoday" in url: return "TexasToday"
+    if "sanfranciscopost" in url: return "SanFranciscoPost"
+    if "cagazette" in url: return "CAGazette"
+    if "californiaobserver" in url: return "CaliforniaObserver"
+    if "thechicagojournal" in url: return "ChicagoJournal"
+    if "womensjournal" in url: return "WomensJournal"
+    if "blknews" in url: return "BLKNews"
+    if "influencerdaily" in url: return "InfluencerDaily"
+    if "artistweekly" in url: return "ArtistWeekly"
+    if "usreporter" in url: return "USReporter"
+    if "theamericannews" in url: return "TheAmericanNews"
+    if "realestatetoday" in url: return "RealEstateToday"
     for s in SHOUTOUT_SITES:
         if s in url:
             return s.replace(".com", "").replace("shoutout", "ShoutOut").title()

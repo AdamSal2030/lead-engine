@@ -279,6 +279,51 @@ def find_company(text: str) -> str | None:
     return None
 
 
+def _extract_text_for_claude(soup: BeautifulSoup, title_text: str,
+                             body, url: str) -> str:
+    """Extract clean, minimal text for Claude — ~500 tokens vs 2000+ for raw HTML.
+    Sends: URL + page title + meta description + first 2500 chars of article text."""
+    parts = [f"URL: {url}"]
+    if title_text:
+        parts.append(f"PAGE TITLE: {title_text}")
+    meta = soup.find("meta", attrs={"name": "description"})
+    if meta and meta.get("content"):
+        parts.append(f"META DESCRIPTION: {meta['content']}")
+    if body:
+        body_text = body.get_text(" ", strip=True)[:2500]
+        parts.append(f"ARTICLE TEXT:\n{body_text}")
+    return "\n\n".join(parts)
+
+
+def _is_interview_worthy(title_text: str, body_text: str) -> bool:
+    """Quick pre-screen: is this likely an interview/profile about a real person?
+    Returns False for listicles, how-to guides, news articles, etc.
+    Saves a Claude call on pages that would definitely return {"skip": true}."""
+    if not body_text or len(body_text) < 200:
+        return False
+    combined = (title_text + " " + body_text[:1000]).lower()
+    # Must have at least one name-like keyword to be worth sending
+    signals = [
+        "interview", "meet ", "founder", "co-founder", "ceo", "owner",
+        "entrepreneur", "startup", "coach", "consultant", "tell us",
+        "launched", "founded", "started ", "built ", "our story",
+        "i started", "i founded", "i launched", "i built", "i created",
+        "my business", "my company", "my practice", "my agency",
+        "photographer", "designer", "therapist", "realtor", "attorney",
+        "chef ", "artist ", "author ", "speaker ", "trainer ",
+    ]
+    if not any(s in combined for s in signals):
+        return False
+    # Reject obvious non-interview patterns
+    rejects = [
+        "top 10", "top 5", "best of", "how to ", "guide to", "tips for",
+        "breaking news", "press release", "stock market", "earnings report",
+    ]
+    if any(r in combined for r in rejects):
+        return False
+    return True
+
+
 async def parse_article(url: str) -> dict | None:
     """Returns dict with name, website, role, company, niche, hook, article_emails, or None.
 
@@ -286,7 +331,12 @@ async def parse_article(url: str) -> dict | None:
       1. Authority Magazine: RSS-cached name + Clearbit domain resolution
       2. Regex: H1 name + website scrape (fast, free, no API)
       3. Claude Haiku fallback: fires when regex can't find name or website
-         — also extracts niche + personalisation hook
+         — sends clean extracted text (~500 tokens, not raw HTML)
+         — only fires when article passes interview pre-screen
+         — respects CLAUDE_MAX_PER_DAY daily cap
+
+    Returns {"_failed": "claude"} when regex fails AND Claude was tried but also
+    failed — so the orchestrator can mark the URL as claude_no_parse (never retry).
     """
     from pipeline.sources import AUTHORITY_CACHE, source_label as _src
 
@@ -328,8 +378,13 @@ async def parse_article(url: str) -> dict | None:
 
     # --- Claude fallback when regex couldn't extract name or website ---
     if (not name or not website) and html:
+        # Pre-screen: skip Claude call if page clearly isn't an interview/profile
+        if not _is_interview_worthy(title_text, body_text):
+            return None  # not an interview — mark no_parse (cheap, no Claude)
+
         from pipeline.claude_parser import parse_with_claude
-        claude_result = await parse_with_claude(url, html)
+        clean_text = _extract_text_for_claude(soup, title_text, body, url)
+        claude_result = await parse_with_claude(url, clean_text)
         if claude_result:
             article_emails = extract_emails(str(body)) if body else set()
             from pipeline.niche import classify
@@ -349,7 +404,9 @@ async def parse_article(url: str) -> dict | None:
                 "article_emails": sorted(article_emails),
                 "_parsed_by": "claude",
             }
-        return None  # both regex and Claude failed
+        # Claude was tried and failed — signal orchestrator to mark as claude_no_parse
+        # so this URL is never retried (saves future Haiku calls)
+        return {"_failed": "claude"}
 
     if not name or not body or not website:
         return None

@@ -70,6 +70,8 @@ async def clear_stuck_seen(include_no_parse: bool = False) -> int:
     Always clears: no_emails, error
     include_no_parse=True: also clears no_parse — use when Claude parser is
     available since it can successfully extract from articles the regex missed.
+    Never clears claude_no_parse — those were already tried by Claude and failed;
+    clearing them would waste Haiku quota re-trying pages that have no usable data.
     """
     from sqlalchemy import delete
     statuses = ["no_emails", "error"]
@@ -180,6 +182,11 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             parsed = await parse_article(url)
             if not parsed:
                 await mark_seen(url, source, "no_parse")
+                return None
+            # Claude was tried but couldn't extract name+website — mark permanently
+            # so this URL is never handed to Claude again (saves daily quota)
+            if parsed.get("_failed") == "claude":
+                await mark_seen(url, source, "claude_no_parse")
                 return None
 
             # L1: emails in the article body itself (could be founder's personal gmail)

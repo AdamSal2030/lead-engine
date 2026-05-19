@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     MAX_VERIFY_CONCURRENCY: int = 30     # MV handles 1000 RPM → 30 concurrent is comfortable
     SCRAPE_CONCURRENCY: int = 20         # 30 was too aggressive — caused resource starvation
     EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
-    SKRAPP_CONCURRENCY: int = 2          # parallel Skrapp calls — keep low to avoid 429
+    SKRAPP_CONCURRENCY: int = 5          # parallel Skrapp calls (25k credits — can go higher)
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"
@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # Claude API — powers smart article parsing + niche/hook extraction
     ANTHROPIC_API_KEY: str = ""
     CLAUDE_PARSE_ENABLED: bool = True   # use Claude as fallback when regex parser fails
+    CLAUDE_MAX_PER_DAY: int = 500       # daily cap on Haiku calls to control cost
 
     # Hunter.io — Layer 5 email finder (after Skrapp)
     HUNTER_API_KEY: str = ""

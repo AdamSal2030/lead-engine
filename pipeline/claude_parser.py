@@ -2,18 +2,52 @@ from __future__ import annotations
 """Claude Haiku-powered article parser.
 
 Fires as fallback when the regex parser returns None (no name or no website found).
-Reads the raw HTML, extracts: name, company, website, role, niche, personalization hook.
+Receives clean extracted text (~500 tokens) instead of raw HTML — ~75% cheaper than
+sending the full HTML blob.
 
-Cost: ~$0.00025 per article (Haiku). Only called on regex failures, so total spend
-is low. Results are NOT cached in DB — if the article changes we want a fresh parse.
+Cost: ~$0.000060 per article (Haiku, clean text). Only called on regex failures
+AND only when the article passes the interview pre-screen.
+Daily cap (CLAUDE_MAX_PER_DAY) prevents runaway spend on bad URL pools.
 """
 import json
 import logging
+from datetime import date
 from config import settings
 
 log = logging.getLogger("claude_parser")
 
 _client = None
+
+# In-memory daily call counter — resets on each calendar day (UTC)
+_calls_today: int = 0
+_calls_date: date | None = None
+
+
+def _within_daily_limit() -> bool:
+    global _calls_today, _calls_date
+    today = date.today()
+    if _calls_date != today:
+        _calls_date = today
+        _calls_today = 0
+    return _calls_today < settings.CLAUDE_MAX_PER_DAY
+
+
+def _increment_call() -> None:
+    global _calls_today
+    _calls_today += 1
+
+
+def get_daily_usage() -> dict:
+    """Return current day's call count and cap (for dashboard/API)."""
+    global _calls_today, _calls_date
+    today = date.today()
+    if _calls_date != today:
+        _calls_today = 0
+    return {
+        "calls_today": _calls_today,
+        "cap": settings.CLAUDE_MAX_PER_DAY,
+        "remaining": max(0, settings.CLAUDE_MAX_PER_DAY - _calls_today),
+    }
 
 
 def _get_client():
@@ -27,7 +61,7 @@ def _get_client():
 
 
 SYSTEM_PROMPT = """\
-You are a lead-data extraction assistant. Given raw HTML from an entrepreneur/founder/professional interview or profile page, extract structured data about the featured person.
+You are a lead-data extraction assistant. Given a page title, meta description, and article text from an entrepreneur/founder/professional interview or profile page, extract structured data about the featured person.
 
 Return ONLY a single JSON object — no markdown, no explanation, just JSON.
 
@@ -49,22 +83,24 @@ Hard rules:
 """
 
 
-async def parse_with_claude(url: str, html: str) -> dict | None:
-    """Parse article HTML with Claude Haiku. Returns structured dict or None."""
+async def parse_with_claude(url: str, clean_text: str) -> dict | None:
+    """Parse article with Claude Haiku. Accepts clean extracted text (NOT raw HTML).
+    Returns structured dict or None. Respects daily call cap."""
     client = _get_client()
     if not client:
         return None
 
-    # First 7000 chars capture the title, meta, and first few Q&A paragraphs.
-    # Sending the full HTML wastes tokens and rarely adds useful info.
-    content = html[:7000]
+    if not _within_daily_limit():
+        log.info(f"Claude daily cap ({settings.CLAUDE_MAX_PER_DAY}) reached — skipping {url}")
+        return None
 
     try:
+        _increment_call()
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"URL: {url}\n\nHTML:\n{content}"}],
+            messages=[{"role": "user", "content": f"URL: {url}\n\n{clean_text}"}],
         )
         raw = msg.content[0].text.strip()
 

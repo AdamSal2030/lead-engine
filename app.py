@@ -132,13 +132,25 @@ async def lifespan(app: FastAPI):
     await _mv_load()
     await cleanup_zombie_batches()
 
-    # If Claude parser is configured, previously no_parse URLs can now be re-attempted.
-    # Clear them on startup so the first batch gets a much larger fresh URL pool.
+    # If Claude parser is configured, previously no_parse URLs can be re-attempted.
+    # We only do this ONCE (tracked via a DB counter) — not on every restart —
+    # so Claude doesn't waste quota re-clearing URLs it already tried.
     if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
-        from pipeline.orchestrator import clear_no_parse_seen
-        cleared = await clear_no_parse_seen()
-        if cleared:
-            log.info(f"Claude parser active — cleared {cleared} no_parse URLs for retry.")
+        from sqlalchemy import text as _sql_text
+        async with SessionLocal() as _s:
+            _marker = (await _s.execute(
+                _sql_text("SELECT value FROM counters WHERE key='claude_parse_activated'")
+            )).scalar_one_or_none()
+        if _marker is None:
+            from pipeline.orchestrator import clear_no_parse_seen
+            from db import Counter
+            cleared = await clear_no_parse_seen()
+            async with SessionLocal() as _s:
+                _s.add(Counter(key="claude_parse_activated", value=1))
+                await _s.commit()
+            log.info(f"Claude parser first activation — cleared {cleared} no_parse URLs for retry.")
+        else:
+            log.info("Claude parser already activated — skipping no_parse clear.")
 
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
