@@ -283,8 +283,86 @@ PR_SITES = [
 ]
 
 
+async def clutch_urls(max_pages: int = 5) -> list[str]:
+    """Clutch.co company directory profiles — non-published founders/agency owners.
+    Uses the Clutch sitemap to find company profile pages."""
+    all_urls = []
+    # Clutch has a sitemap index; try profile sitemaps
+    text = await fetch("https://clutch.co/sitemap_index.xml", try_fallbacks=True)
+    if text:
+        sub_sitemaps = re.findall(r"<loc>([^<]+profile[^<]*)</loc>", text)
+        for sm in sub_sitemaps[:max_pages]:
+            sm_text = await fetch(sm, try_fallbacks=True)
+            if not sm_text:
+                continue
+            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
+            for u in urls:
+                if re.match(r"https://clutch\.co/profile/[a-z0-9\-]+/?$", u):
+                    all_urls.append(u)
+    # Fallback: try direct profile sitemap pages
+    if not all_urls:
+        for n in range(1, max_pages + 1):
+            text = await fetch(f"https://clutch.co/sitemap_profiles_{n}.xml", try_fallbacks=True)
+            if not text:
+                break
+            urls = re.findall(r"<loc>([^<]+)</loc>", text)
+            filtered = [u for u in urls if re.match(r"https://clutch\.co/profile/[a-z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+            if not filtered:
+                break
+    log.info(f"Clutch: found {len(all_urls)} profile URLs")
+    return all_urls[:2000]  # cap to prevent overwhelming the queue
+
+
+async def indiehackers_urls() -> list[str]:
+    """IndieHackers founder product pages — bootstrapped/indie founders."""
+    all_urls = []
+    for n in range(1, 10):
+        text = await fetch(f"https://www.indiehackers.com/post-sitemap{n}.xml", try_fallbacks=True)
+        if not text:
+            # Try main sitemap
+            text = await fetch("https://www.indiehackers.com/sitemap.xml", try_fallbacks=True)
+            if not text:
+                break
+            urls = re.findall(r"<loc>([^<]+)</loc>", text)
+            # Product/interview pages
+            filtered = [u for u in urls
+                        if re.match(r"https://www\.indiehackers\.com/product/[a-z0-9\-]+/?$", u)
+                        or re.match(r"https://www\.indiehackers\.com/interview/[a-z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+            break
+        urls = re.findall(r"<loc>([^<]+)</loc>", text)
+        filtered = [u for u in urls
+                    if re.match(r"https://www\.indiehackers\.com/(product|interview)/[a-z0-9\-]+/?$", u)]
+        all_urls.extend(filtered)
+        if not filtered:
+            break
+    log.info(f"IndieHackers: found {len(all_urls)} URLs")
+    return all_urls[:1000]
+
+
+async def designrush_urls(max_pages: int = 5) -> list[str]:
+    """DesignRush agency directory — design, marketing, tech agencies."""
+    all_urls = []
+    for n in range(1, max_pages + 1):
+        text = await fetch(f"https://www.designrush.com/sitemap{n}.xml", try_fallbacks=True)
+        if not text:
+            text = await fetch("https://www.designrush.com/sitemap.xml", try_fallbacks=True)
+        if not text:
+            break
+        urls = re.findall(r"<loc>([^<]+)</loc>", text)
+        filtered = [u for u in urls
+                    if re.match(r"https://www\.designrush\.com/agency/[a-z0-9\-]+/[a-z0-9\-]+/?$", u)]
+        all_urls.extend(filtered)
+        if not filtered and n > 1:
+            break
+    log.info(f"DesignRush: found {len(all_urls)} URLs")
+    return all_urls[:1000]
+
+
 async def collect_all_urls() -> dict[str, list[str]]:
     """Returns dict of source_name -> list of URLs."""
+    import asyncio as _asyncio
     out = {}
     out["canvasrebel"] = await canvasrebel_urls()
     out["boldjourney"] = await boldjourney_urls()
@@ -299,6 +377,10 @@ async def collect_all_urls() -> dict[str, list[str]]:
         out[site.replace(".com", "")] = await shoutout_urls(site)
     for site in PR_SITES:
         out[site.replace(".com", "")] = await wordpress_sitemap_urls(site)
+    # Non-published directory sources (potential feature buyers)
+    out["clutch"] = await clutch_urls()
+    out["indiehackers"] = await indiehackers_urls()
+    out["designrush"] = await designrush_urls()
     total = sum(len(v) for v in out.values())
     log.info(f"Collected {total} URLs across {len(out)} sources")
     return out
@@ -348,6 +430,10 @@ def source_label(url: str) -> str:
     if "usreporter" in url: return "USReporter"
     if "theamericannews" in url: return "TheAmericanNews"
     if "realestatetoday" in url: return "RealEstateToday"
+    # Directory sources
+    if "clutch.co" in url: return "Clutch"
+    if "indiehackers.com" in url: return "IndieHackers"
+    if "designrush.com" in url: return "DesignRush"
     for s in SHOUTOUT_SITES:
         if s in url:
             return s.replace(".com", "").replace("shoutout", "ShoutOut").title()

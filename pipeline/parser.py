@@ -295,33 +295,64 @@ def _extract_text_for_claude(soup: BeautifulSoup, title_text: str,
     return "\n\n".join(parts)
 
 
-def _is_interview_worthy(title_text: str, body_text: str) -> bool:
-    """Quick pre-screen: is this likely an interview/profile about a real person?
-    Returns False for listicles, how-to guides, news articles, etc.
-    Saves a Claude call on pages that would definitely return {"skip": true}."""
-    if not body_text or len(body_text) < 200:
+def _is_interview_worthy(title_text: str, body_text: str, url: str = "") -> bool:
+    """Quick pre-screen: is this page likely an interview/profile about a real person?
+    Returns False for clear non-interview content (listicles, news, product pages).
+    Saves a Claude call on pages that would return {"skip": true}.
+
+    NOTE: this only fires when regex already failed — so we're already on a harder case.
+    Be permissive rather than strict to avoid blocking legitimate interviews with
+    unconventional HTML structures.
+    """
+    title_l = (title_text or "").lower()
+
+    # ── 1. Strong URL signals — very high precision ──────────────────────────
+    slug = url.rstrip("/").split("/")[-1].lower()
+    if any(s in slug for s in ("meet-", "-meets-", "interview-", "spotlight-",
+                                "founder-story", "our-story")):
+        return True
+    # Voyage / ShoutOut / similar date-prefixed articles often match "meet" in slug
+    if slug.count("-") >= 4 and any(s in url.lower() for s in ("/meet-", "/interview-")):
+        return True
+
+    # ── 2. Strong title signals ───────────────────────────────────────────────
+    title_signals = [
+        "meet ", "meet: ", "interview with", "q&a with", "in conversation with",
+        "we chatted with", "i sat down with", "founder spotlight", "founder story",
+        "catching up with", "exclusive with", "get to know",
+    ]
+    if any(s in title_l for s in title_signals):
+        return True
+
+    # ── 3. Hard-reject obvious non-interview patterns ────────────────────────
+    hard_rejects = [
+        "how to ", "top 10 ", "top 5 ", "best of ", "guide to",
+        "breaking:", "just in:", "stock market", "earnings report",
+    ]
+    if any(r in title_l for r in hard_rejects):
         return False
-    combined = (title_text + " " + body_text[:1000]).lower()
-    # Must have at least one name-like keyword to be worth sending
-    signals = [
-        "interview", "meet ", "founder", "co-founder", "ceo", "owner",
-        "entrepreneur", "startup", "coach", "consultant", "tell us",
-        "launched", "founded", "started ", "built ", "our story",
-        "i started", "i founded", "i launched", "i built", "i created",
-        "my business", "my company", "my practice", "my agency",
+
+    # ── 4. If body is missing/tiny, trust the title + URL (don't over-reject) ─
+    # CSS selector can fail on non-standard layouts; don't permanently discard
+    if not body_text or len(body_text) < 100:
+        # Allow Claude if the title has a capitalized two-word name pattern
+        # (a heuristic for "Meet [Name]" style titles stripped of prefix)
+        words = title_text.split()[:5] if title_text else []
+        has_name_pattern = sum(1 for w in words if w and w[0].isupper() and len(w) > 2) >= 2
+        return has_name_pattern
+
+    # ── 5. Body text keyword check ────────────────────────────────────────────
+    combined = title_l + " " + body_text[:1500].lower()
+    body_signals = [
+        "founder", "co-founder", "ceo", "owner", "entrepreneur", "startup",
+        "coach", "consultant", "launched", "founded", "tell us", "tell me",
+        "i started", "i built", "i created", "i founded", "my business",
+        "my company", "my practice", "my agency", "our company", "our business",
         "photographer", "designer", "therapist", "realtor", "attorney",
-        "chef ", "artist ", "author ", "speaker ", "trainer ",
+        "chef ", "artist ", "author ", "speaker ", "trainer ", "blogger ",
+        "podcaster", "influencer", "freelancer",
     ]
-    if not any(s in combined for s in signals):
-        return False
-    # Reject obvious non-interview patterns
-    rejects = [
-        "top 10", "top 5", "best of", "how to ", "guide to", "tips for",
-        "breaking news", "press release", "stock market", "earnings report",
-    ]
-    if any(r in combined for r in rejects):
-        return False
-    return True
+    return any(s in combined for s in body_signals)
 
 
 async def parse_article(url: str) -> dict | None:
@@ -379,7 +410,7 @@ async def parse_article(url: str) -> dict | None:
     # --- Claude fallback when regex couldn't extract name or website ---
     if (not name or not website) and html:
         # Pre-screen: skip Claude call if page clearly isn't an interview/profile
-        if not _is_interview_worthy(title_text, body_text):
+        if not _is_interview_worthy(title_text, body_text, url):
             return None  # not an interview — mark no_parse (cheap, no Claude)
 
         from pipeline.claude_parser import parse_with_claude
@@ -408,12 +439,13 @@ async def parse_article(url: str) -> dict | None:
         # so this URL is never retried (saves future Haiku calls)
         return {"_failed": "claude"}
 
-    if not name or not body or not website:
+    # name + website found via regex — body is optional (used only for email extraction)
+    if not name or not website:
         return None
 
-    article_emails = extract_emails(str(body))
-    role = find_role(body_text)
-    company = find_company(body_text)
+    article_emails = extract_emails(str(body)) if body else set()
+    role = find_role(body_text) if body_text else None
+    company = find_company(body_text) if body_text else None
 
     from pipeline.niche import classify
     niche = classify(role, company, None, website)

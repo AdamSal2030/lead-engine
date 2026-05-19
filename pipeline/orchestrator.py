@@ -179,7 +179,21 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
     """
     async with sem:
         try:
-            parsed = await parse_article(url)
+            # Route directory URLs through their dedicated parser (no article needed)
+            if source in ("clutch", "designrush"):
+                from pipeline.directory_parser import (
+                    parse_clutch_profile, parse_designrush_profile
+                )
+                if source == "clutch":
+                    parsed = await parse_clutch_profile(url)
+                else:
+                    parsed = await parse_designrush_profile(url)
+            elif source == "indiehackers":
+                from pipeline.directory_parser import parse_indiehackers_profile
+                parsed = await parse_indiehackers_profile(url)
+            else:
+                parsed = await parse_article(url)
+
             if not parsed:
                 await mark_seen(url, source, "no_parse")
                 return None
@@ -226,6 +240,12 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
                 _domain = _pu.netloc.replace("www.", "").lower()
             except Exception:
                 _domain = ""
+
+            # For directory sources with only a company name (no personal name),
+            # generate decision-maker pattern emails as L3.5 before hitting Skrapp.
+            if parsed.get("_is_company") and _domain and need_skrapp:
+                for dm_local in ["founder", "ceo", "owner", "hello", "contact", "info"]:
+                    combined.append(f"{dm_local}@{_domain}")
 
             # L4: Skrapp finder
             if need_skrapp and skrapp_finder.get_state().get("enabled"):

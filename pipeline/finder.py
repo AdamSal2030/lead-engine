@@ -27,15 +27,15 @@ SKRAPP_CALLS = 0
 SKRAPP_HITS = 0  # successful finds (got an email back)
 _lock = asyncio.Lock()
 
-# Catch-all giants — Skrapp can't give us a real mailbox here
+# True mega-corps — Skrapp returns generic/catch-all for these, waste of a credit
+# NOTE: intentionally small list — only add when Skrapp is confirmed to fail there.
+# Do NOT include founder-interview sites (valiantceo, ceomonthly, thefounderhour)
+# or news outlets — those domain owners ARE our leads.
 MEGA_DOMAINS = {
-    "forbes.com","yelp.com","deloitte.com","wipro.com","kaplan.com.sg","amazon.com",
-    "google.com","apple.com","microsoft.com","ibm.com","oracle.com","accenture.com",
-    "kpmg.com","ey.com","pwc.com","mckinsey.com","bain.com","bcg.com","weforum.org",
-    "newyorkfed.org","theglobeandmail.com","cnn.com","bbc.com","nyt.com","wsj.com",
-    "ssrn.com","linkedin.com","facebook.com","meta.com","valiantceo.com","tesla.com",
-    "ceomonthly.com","thefounderhour.com","businessinsider.com","reuters.com",
-    "techcrunch.com","verge.com","wired.com","gizmodo.com",
+    "amazon.com","google.com","apple.com","microsoft.com","ibm.com","oracle.com",
+    "accenture.com","kpmg.com","ey.com","pwc.com","mckinsey.com","bain.com","bcg.com",
+    "meta.com","tesla.com","deloitte.com","linkedin.com","facebook.com",
+    "weforum.org","newyorkfed.org","ssrn.com",
 }
 
 
@@ -181,10 +181,9 @@ async def find_email(first_name: str, last_name: str, domain: str) -> dict | Non
 
         if not email:
             return None
-        # We accept "valid" and "unknown" — Reoon will gate-keep next
-        # Skip "catch-all" — Skrapp gave up, generic pattern guess
-        if quality == "catch-all":
-            return None
+        # Accept all quality levels including "catch-all" — our verifiers (MV + Reoon)
+        # do SMTP-level checks that are more accurate than Skrapp's domain classification.
+        # "catch-all" just means the domain accepts any address; the email may still be real.
 
         SKRAPP_HITS += 1
         if SKRAPP_HITS % 5 == 0:
