@@ -454,7 +454,11 @@ async def parse_article(url: str) -> dict | None:
         if not _is_interview_worthy(title_text, body_text, url):
             return None  # not an interview — mark no_parse (cheap, no Claude)
 
-        from pipeline.claude_parser import parse_with_claude
+        from pipeline.claude_parser import parse_with_claude, _get_client
+        # If Claude is not configured (no API key), don't permanently mark as failed
+        if not _get_client():
+            return None  # mark no_parse — can retry when API key is added
+
         clean_text = _extract_text_for_claude(soup, title_text, body, url)
         claude_result = await parse_with_claude(url, clean_text)
         if claude_result:
@@ -476,7 +480,7 @@ async def parse_article(url: str) -> dict | None:
                 "article_emails": sorted(article_emails),
                 "_parsed_by": "claude",
             }
-        # Claude was tried and failed — signal orchestrator to mark as claude_no_parse
+        # Claude was configured, tried, and failed — mark as claude_no_parse
         # so this URL is never retried (saves future Haiku calls)
         return {"_failed": "claude"}
 
