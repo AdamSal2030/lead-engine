@@ -353,14 +353,21 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                 log.info(f"  outer iter {wait_iterations + 1}: {len(unseen)} unseen URLs available")
 
                 if not unseen:
-                    # Try retrying URLs that previously failed (no_emails / error)
-                    # — gives them another chance with our updated parser + UAs
+                    # Try retrying URLs that previously failed
                     if wait_iterations == 0:
-                        log.info("Pool exhausted on first pass. Clearing stuck-seen URLs to retry them...")
+                        log.info("Pool exhausted. Clearing stuck-seen URLs (no_emails + error)...")
                         cleared = await clear_stuck_seen()
                         log.info(f"  cleared {cleared} stuck URLs for retry")
+
+                        # Also clear no_parse so Claude can attempt them with the improved
+                        # pre-screen + text extractor. This is the main source of new leads
+                        # when all article URLs have been processed at least once.
+                        if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
+                            np_cleared = await clear_no_parse_seen()
+                            log.info(f"  cleared {np_cleared} no_parse URLs — Claude will retry with improved pre-screen")
+
                         unseen = await get_unseen_urls(all_urls)
-                        log.info(f"  now {len(unseen)} unseen URLs after clearing stuck ones")
+                        log.info(f"  now {len(unseen)} unseen URLs available after clearing")
 
                     if not unseen:
                         if settings.PARTIAL_BATCHES:

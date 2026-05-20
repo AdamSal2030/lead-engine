@@ -132,25 +132,29 @@ async def lifespan(app: FastAPI):
     await _mv_load()
     await cleanup_zombie_batches()
 
-    # If Claude parser is configured, previously no_parse URLs can be re-attempted.
-    # We only do this ONCE (tracked via a DB counter) — not on every restart —
-    # so Claude doesn't waste quota re-clearing URLs it already tried.
+    # If Claude parser is configured, clear no_parse URLs so they get a Claude attempt.
+    # We do this at most once every 7 days (keyed by ISO week) — on each deploy and
+    # weekly thereafter — so the no_parse backlog stays fresh without over-spending.
     if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
+        from datetime import date as _date
         from sqlalchemy import text as _sql_text
+        _week_key = f"no_parse_cleared_{_date.today().isocalendar()[0]}W{_date.today().isocalendar()[1]}"
         async with SessionLocal() as _s:
             _marker = (await _s.execute(
-                _sql_text("SELECT value FROM counters WHERE key='claude_parse_activated'")
+                _sql_text(f"SELECT value FROM counters WHERE key='{_week_key}'")
             )).scalar_one_or_none()
         if _marker is None:
             from pipeline.orchestrator import clear_no_parse_seen
             from db import Counter
             cleared = await clear_no_parse_seen()
             async with SessionLocal() as _s:
-                _s.add(Counter(key="claude_parse_activated", value=1))
+                # Clean up old week markers to keep counter table small
+                await _s.execute(_sql_text("DELETE FROM counters WHERE key LIKE 'no_parse_cleared_%'"))
+                _s.add(Counter(key=_week_key, value=1))
                 await _s.commit()
-            log.info(f"Claude parser first activation — cleared {cleared} no_parse URLs for retry.")
+            log.info(f"Weekly no_parse clear: freed {cleared} URLs for Claude retry ({_week_key}).")
         else:
-            log.info("Claude parser already activated — skipping no_parse clear.")
+            log.info(f"no_parse already cleared this week ({_week_key}) — skipping.")
 
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())

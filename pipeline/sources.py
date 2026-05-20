@@ -226,9 +226,20 @@ async def ideamensch_urls() -> list[str]:
     return all_urls
 
 
-async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
+async def wordpress_sitemap_urls(site: str, max_pages: int = 10,
+                                  strict: bool = False) -> list[str]:
     """Generic WordPress post-sitemap collector (paginated post-sitemapN.xml).
-    Used for CEO Weekly, Famous Times, etc."""
+
+    strict=False (default): require 4+ hyphens in slug (filters category/tag pages)
+    strict=True: ALSO require at least one interview keyword in the slug
+                 (use for news-wire sites that mix interviews with plain news articles)
+    """
+    INTERVIEW_SLUG_KEYWORDS = (
+        "meet-", "founder", "ceo", "owner", "entrepreneur", "coach",
+        "consultant", "realtor", "attorney", "therapist", "photographer",
+        "designer", "author", "speaker", "interview", "spotlight", "profile",
+        "podcast", "creative", "artist", "blogger", "influencer",
+    )
     all_urls = []
     for n in range(1, max_pages + 1):
         text = await fetch(f"https://{site}/post-sitemap{n}.xml", try_fallbacks=True)
@@ -237,49 +248,42 @@ async def wordpress_sitemap_urls(site: str, max_pages: int = 10) -> list[str]:
         urls = re.findall(r"<loc>([^<]+)</loc>", text)
         if not urls:
             break
-        # Keep only URLs that have at least 4 hyphens in the slug (filters category/tag pages)
-        urls = [u for u in urls
-                if re.match(rf"https?://(?:www\.)?{re.escape(site)}/[^/]+/?$", u)
-                and u.rstrip("/").split("/")[-1].count("-") >= 4]
-        all_urls.extend(urls)
+        filtered = []
+        for u in urls:
+            slug = u.rstrip("/").split("/")[-1].lower()
+            if not re.match(rf"https?://(?:www\.)?{re.escape(site)}/[^/]+/?$", u):
+                continue
+            if slug.count("-") < 4:
+                continue
+            if strict and not any(kw in slug for kw in INTERVIEW_SLUG_KEYWORDS):
+                continue
+            filtered.append(u)
+        all_urls.extend(filtered)
     return all_urls
 
 
+# High-quality dedicated interview sites — standard filter (4+ hyphens is enough)
 PR_SITES = [
-    # Original interview/PR sites (founders, CEOs)
     "ceoweekly.com", "famoustimes.com", "disruptmagazine.com", "ceomonthly.com",
     "americanentrepreneurship.com", "ceoblognation.com",
-    # Broader entrepreneur + niche-professional interview sites
-    "addicted2success.com",       # entrepreneurs, coaches, mindset
-    "thriveglobal.com",           # wellness, coaches, executives
-    "beingentrepreneur.com",      # SMB founders across niches
-    "gritdaily.com",              # startups, agencies, creatives
-    "influencive.com",            # personal brand, coaching, marketing
-    # NewsAnchored network — regional business/entrepreneur interview sites
-    "nyweekly.com",               # New York entrepreneurs
-    "lawire.com",                 # Los Angeles founders
-    "kivodaily.com",              # general founder interviews
-    "usinsider.com",              # US business founders
-    "usbusinessnews.com",         # US business leaders
-    "worldreporter.com",          # global entrepreneurs
-    "marketdaily.com",            # market/business founders
-    "economicinsider.com",        # economic/business leaders
-    "portlandnews.com",           # Portland entrepreneurs
-    "miamiwire.com",              # Miami founders
-    "nywire.com",                 # New York founders
-    "atlwire.com",                # Atlanta founders
-    "texastoday.com",             # Texas entrepreneurs
-    "sanfranciscopost.com",       # SF founders
-    "cagazette.com",              # California entrepreneurs
-    "californiaobserver.com",     # California founders
-    "thechicagojournal.com",      # Chicago entrepreneurs
-    "womensjournal.com",          # women entrepreneurs
-    "blknews.com",                # Black entrepreneurs/founders
-    "influencerdaily.com",        # influencers, creators, coaches
-    "artistweekly.com",           # creative entrepreneurs
-    "usreporter.com",             # US founders/leaders
-    "theamericannews.com",        # American entrepreneurs
-    "realestatetoday.com",        # real estate entrepreneurs
+    "addicted2success.com",
+    "thriveglobal.com",
+    "beingentrepreneur.com",
+    "gritdaily.com",
+    "influencive.com",
+]
+
+# NewsAnchored network — mix of interview profiles + press releases.
+# Use strict=True URL filter to only pick up article slugs that look like profiles.
+PR_SITES_STRICT = [
+    "nyweekly.com",        "lawire.com",           "kivodaily.com",
+    "usinsider.com",       "usbusinessnews.com",   "worldreporter.com",
+    "marketdaily.com",     "economicinsider.com",  "portlandnews.com",
+    "miamiwire.com",       "nywire.com",           "atlwire.com",
+    "texastoday.com",      "sanfranciscopost.com", "cagazette.com",
+    "californiaobserver.com", "thechicagojournal.com", "womensjournal.com",
+    "blknews.com",         "influencerdaily.com",  "artistweekly.com",
+    "usreporter.com",      "theamericannews.com",  "realestatetoday.com",
 ]
 
 
@@ -377,6 +381,9 @@ async def collect_all_urls() -> dict[str, list[str]]:
         out[site.replace(".com", "")] = await shoutout_urls(site)
     for site in PR_SITES:
         out[site.replace(".com", "")] = await wordpress_sitemap_urls(site)
+    # NewsAnchored network: strict slug filter to avoid plain news articles
+    for site in PR_SITES_STRICT:
+        out[site.replace(".com", "")] = await wordpress_sitemap_urls(site, strict=True)
     # Non-published directory sources (potential feature buyers)
     out["clutch"] = await clutch_urls()
     out["indiehackers"] = await indiehackers_urls()
