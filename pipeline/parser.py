@@ -332,6 +332,23 @@ def _extract_text_for_claude(soup: BeautifulSoup, title_text: str,
         if page_text:
             parts.append(f"PAGE TEXT:\n{page_text}")
 
+        # Also extract external link URLs explicitly (href attributes aren't in text nodes)
+        # This helps Claude find the founder's website even when it's only in an <a href>
+        page_domain = url.split("/")[2].lower().replace("www.", "") if "/" in url else ""
+        ext_links = []
+        for a in soup.find_all("a", href=True):
+            h = a.get("href", "").strip()
+            if not h.startswith("http"):
+                continue
+            link_domain = h.split("/")[2].lower().replace("www.", "") if h.count("/") >= 2 else ""
+            if link_domain == page_domain:
+                continue
+            if any(s in link_domain for s in SOCIALS):
+                continue
+            ext_links.append(h.split("?")[0].split("#")[0])
+        if ext_links:
+            parts.append("EXTERNAL LINKS ON PAGE:\n" + "\n".join(ext_links[:10]))
+
     return "\n\n".join(parts)
 
 
