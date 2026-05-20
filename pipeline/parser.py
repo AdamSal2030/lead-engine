@@ -309,15 +309,20 @@ def _extract_text_for_claude(soup: BeautifulSoup, title_text: str,
         if content:
             page_text = content.get_text(" ", strip=True)[:2500]
         else:
-            # Fallback: skip nav/footer/header text via direct get_text on filtered tags
+            # Fallback: skip nav/footer/header text — check all ancestors, not just parent
             skip = {"nav", "footer", "header", "script", "style", "aside", "noscript"}
             chunks = []
             total = 0
             for el in soup.find_all(string=True):
                 if total >= 2500:
                     break
-                parent = el.parent
-                if not parent or parent.name in skip:
+                # Walk up the ancestor chain to check if any ancestor is a skip tag
+                in_skip = False
+                for ancestor in el.parents:
+                    if ancestor.name in skip:
+                        in_skip = True
+                        break
+                if in_skip:
                     continue
                 text = el.strip()
                 if text:
