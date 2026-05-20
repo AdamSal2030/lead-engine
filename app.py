@@ -130,31 +130,41 @@ async def lifespan(app: FastAPI):
     await _sk_load()
     from pipeline.mv_verifier import _load_counter as _mv_load
     await _mv_load()
-    await cleanup_zombie_batches()
+    try:
+        await asyncio.wait_for(cleanup_zombie_batches(), timeout=30)
+    except asyncio.TimeoutError:
+        log.warning("cleanup_zombie_batches() timed out after 30s — skipping.")
+    except Exception as e:
+        log.warning(f"cleanup_zombie_batches() failed: {e} — skipping.")
 
     # If Claude parser is configured, clear no_parse URLs so they get a Claude attempt.
     # We do this at most once every 7 days (keyed by ISO week) — on each deploy and
     # weekly thereafter — so the no_parse backlog stays fresh without over-spending.
     if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
-        from datetime import date as _date
-        from sqlalchemy import text as _sql_text
-        _week_key = f"no_parse_cleared_{_date.today().isocalendar()[0]}W{_date.today().isocalendar()[1]}"
-        async with SessionLocal() as _s:
-            _marker = (await _s.execute(
-                _sql_text(f"SELECT value FROM counters WHERE key='{_week_key}'")
-            )).scalar_one_or_none()
-        if _marker is None:
-            from pipeline.orchestrator import clear_no_parse_seen
-            from db import Counter
-            cleared = await clear_no_parse_seen()
+        try:
+            from datetime import date as _date
+            from sqlalchemy import text as _sql_text
+            _week_key = f"no_parse_cleared_{_date.today().isocalendar()[0]}W{_date.today().isocalendar()[1]}"
             async with SessionLocal() as _s:
-                # Clean up old week markers to keep counter table small
-                await _s.execute(_sql_text("DELETE FROM counters WHERE key LIKE 'no_parse_cleared_%'"))
-                _s.add(Counter(key=_week_key, value=1))
-                await _s.commit()
-            log.info(f"Weekly no_parse clear: freed {cleared} URLs for Claude retry ({_week_key}).")
-        else:
-            log.info(f"no_parse already cleared this week ({_week_key}) — skipping.")
+                _marker = (await _s.execute(
+                    _sql_text(f"SELECT value FROM counters WHERE key='{_week_key}'")
+                )).scalar_one_or_none()
+            if _marker is None:
+                from pipeline.orchestrator import clear_no_parse_seen
+                from db import Counter
+                cleared = await asyncio.wait_for(clear_no_parse_seen(), timeout=60)
+                async with SessionLocal() as _s:
+                    # Clean up old week markers to keep counter table small
+                    await _s.execute(_sql_text("DELETE FROM counters WHERE key LIKE 'no_parse_cleared_%'"))
+                    _s.add(Counter(key=_week_key, value=1))
+                    await _s.commit()
+                log.info(f"Weekly no_parse clear: freed {cleared} URLs for Claude retry ({_week_key}).")
+            else:
+                log.info(f"no_parse already cleared this week ({_week_key}) — skipping.")
+        except asyncio.TimeoutError:
+            log.warning("Weekly no_parse clear timed out after 60s — will retry on pool exhaustion.")
+        except Exception as e:
+            log.warning(f"Weekly no_parse clear failed: {e} — will retry on pool exhaustion.")
 
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
