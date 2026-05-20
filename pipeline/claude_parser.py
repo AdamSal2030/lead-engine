@@ -100,7 +100,7 @@ async def parse_with_claude(url: str, clean_text: str) -> dict | None:
             model="claude-haiku-4-5-20251001",
             max_tokens=350,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"URL: {url}\n\n{clean_text}"}],
+            messages=[{"role": "user", "content": clean_text}],
         )
         raw = msg.content[0].text.strip()
 

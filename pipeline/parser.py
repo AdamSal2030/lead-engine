@@ -282,16 +282,51 @@ def find_company(text: str) -> str | None:
 def _extract_text_for_claude(soup: BeautifulSoup, title_text: str,
                              body, url: str) -> str:
     """Extract clean, minimal text for Claude — ~500 tokens vs 2000+ for raw HTML.
-    Sends: URL + page title + meta description + first 2500 chars of article text."""
+    Sends: URL + page title + meta description + first 2500 chars of article text.
+
+    When BeautifulSoup can't find the <article> element (body=None), falls back to
+    stripping nav/footer/script/style tags and using the remaining page text.
+    This captures content in non-standard layouts (Voyage, BoldJourney, etc.)
+    """
     parts = [f"URL: {url}"]
     if title_text:
         parts.append(f"PAGE TITLE: {title_text}")
     meta = soup.find("meta", attrs={"name": "description"})
     if meta and meta.get("content"):
         parts.append(f"META DESCRIPTION: {meta['content']}")
+
     if body:
         body_text = body.get_text(" ", strip=True)[:2500]
         parts.append(f"ARTICLE TEXT:\n{body_text}")
+    else:
+        # No <article> tag found — try common content containers, then fall back to
+        # stripping known chrome elements from the full page.
+        content = (
+            soup.find("main")
+            or soup.find(id=re.compile(r"content|main|post|article", re.I))
+            or soup.find(class_=re.compile(r"content|main|post|article|body", re.I))
+        )
+        if content:
+            page_text = content.get_text(" ", strip=True)[:2500]
+        else:
+            # Fallback: skip nav/footer/header text via direct get_text on filtered tags
+            skip = {"nav", "footer", "header", "script", "style", "aside", "noscript"}
+            chunks = []
+            total = 0
+            for el in soup.find_all(string=True):
+                if total >= 2500:
+                    break
+                parent = el.parent
+                if not parent or parent.name in skip:
+                    continue
+                text = el.strip()
+                if text:
+                    chunks.append(text)
+                    total += len(text)
+            page_text = " ".join(chunks)[:2500]
+        if page_text:
+            parts.append(f"PAGE TEXT:\n{page_text}")
+
     return "\n\n".join(parts)
 
 
@@ -328,8 +363,14 @@ def _is_interview_worthy(title_text: str, body_text: str, url: str = "") -> bool
     hard_rejects = [
         "how to ", "top 10 ", "top 5 ", "best of ", "guide to",
         "breaking:", "just in:", "stock market", "earnings report",
+        " ways to ", " tips to ", " steps to ", " reasons to ",
+        " things to ", " ways you ", " tips for ", "must-know",
+        "the best ", "a guide ", "everything you", "what you need",
     ]
     if any(r in title_l for r in hard_rejects):
+        return False
+    # Digit-prefixed list articles: "5 Ways...", "10 Things...", "7 Tips..."
+    if re.match(r"^\d+\s+(?:ways|tips|steps|reasons|things|secrets|lessons|habits)\b", title_l):
         return False
 
     # ── 4. If body is missing/tiny, trust the title + URL (don't over-reject) ─

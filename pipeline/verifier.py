@@ -89,22 +89,59 @@ async def verify_email(email: str, retries: int = 3) -> dict | None:
 
 
 def _is_personal_email(email: str, name: str) -> bool:
-    """True if the email local part looks like a real person's address (not generic)."""
+    """True if the email local part looks like a real person's address (not generic).
+
+    Priority:
+      1. Name match — local contains the founder's first or last name → definitely personal
+      2. Generic/business word list → definitely not personal
+      3. Fallback heuristic: only accept if local looks like a person's name token
+         (short, letters-only, no generic business words)
+    """
     local = email.split("@")[0].lower()
-    generic = {"info", "hello", "contact", "support", "team", "admin", "office",
-               "sales", "help", "press", "media", "hr", "jobs", "careers",
-               "noreply", "no-reply", "donotreply", "mail", "enquiries", "enquiry"}
+    # Broad generic set — any email with these local parts is a role address, not personal
+    generic = {
+        "info", "hello", "contact", "support", "team", "admin", "office",
+        "sales", "help", "press", "media", "hr", "jobs", "careers",
+        "noreply", "no-reply", "donotreply", "mail", "enquiries", "enquiry",
+        "webmaster", "postmaster", "hostmaster", "abuse", "newsletter",
+        "marketing", "billing", "accounting", "legal", "privacy", "security",
+        "partnership", "partnerships", "affiliate", "affiliates", "service",
+        "services", "general", "reception", "booking", "reservations",
+        "customerservice", "customer", "feedback", "inquiry", "inquiries",
+    }
     if local in generic:
         return False
-    # Check if name tokens appear in local part
+
+    # Check if name tokens appear in local part (strongest signal)
     if name:
         parts = name.lower().split()
         first = re.sub(r"[^a-z]", "", parts[0]) if parts else ""
         last = re.sub(r"[^a-z]", "", parts[-1]) if len(parts) > 1 else ""
-        if (first and first in local) or (last and last in local):
+        if (first and len(first) >= 3 and first in local):
             return True
-    # Local part looks like a person (not all-generic)
-    return len(local) >= 3 and not any(c.isdigit() for c in local[:3])
+        if (last and len(last) >= 3 and last in local):
+            return True
+
+    # Fallback: treat as personal only if local looks like a name token
+    # (letters-only or letters with common separators, reasonable length, no leading digits)
+    local_alpha = re.sub(r"[._\-]", "", local)
+    if any(c.isdigit() for c in local[:2]):
+        return False  # starts with digit(s) → account/generated email
+    if not local_alpha.isalpha():
+        return False  # contains unexpected chars → not a simple name
+    if len(local_alpha) < 3 or len(local_alpha) > 25:
+        return False  # too short or suspiciously long
+    # Final word check — reject common non-name English words
+    non_name_words = {
+        "news", "blog", "shop", "store", "app", "web", "site", "page",
+        "mail", "email", "post", "work", "home", "base", "hub", "central",
+        "connect", "link", "network", "group", "club", "pro", "studio",
+        "media", "digital", "global", "local", "official", "real", "best",
+        "top", "new", "now", "live", "care", "care", "tech", "code",
+    }
+    if local_alpha in non_name_words:
+        return False
+    return True
 
 
 async def verify_lead(lead: dict) -> dict | None:
