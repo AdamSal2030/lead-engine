@@ -118,26 +118,35 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # SQLite doesn't auto-ALTER existing tables when models gain new columns.
-    # Apply additive migrations manually here. Each is idempotent.
+    # Additive column migrations — idempotent, safe to run on every startup.
+    # Works for both SQLite (PRAGMA) and PostgreSQL (information_schema).
     from sqlalchemy import text
     migrations = [
         # responded / responded_at columns added for Instantly unibox reply tracking
-        ("verified_leads", "responded", "ALTER TABLE verified_leads ADD COLUMN responded BOOLEAN DEFAULT 0"),
-        ("verified_leads", "responded_at", "ALTER TABLE verified_leads ADD COLUMN responded_at DATETIME"),
+        ("verified_leads", "responded", "ALTER TABLE verified_leads ADD COLUMN responded BOOLEAN DEFAULT FALSE"),
+        ("verified_leads", "responded_at", "ALTER TABLE verified_leads ADD COLUMN responded_at TIMESTAMP"),
         # niche + hook added for multi-niche segmentation and personalisation
         ("verified_leads", "niche", "ALTER TABLE verified_leads ADD COLUMN niche VARCHAR(80)"),
         ("verified_leads", "hook", "ALTER TABLE verified_leads ADD COLUMN hook TEXT"),
         # bounce tracking — synced from Instantly
-        ("verified_leads", "bounced", "ALTER TABLE verified_leads ADD COLUMN bounced BOOLEAN DEFAULT 0"),
-        ("verified_leads", "bounced_at", "ALTER TABLE verified_leads ADD COLUMN bounced_at DATETIME"),
+        ("verified_leads", "bounced", "ALTER TABLE verified_leads ADD COLUMN bounced BOOLEAN DEFAULT FALSE"),
+        ("verified_leads", "bounced_at", "ALTER TABLE verified_leads ADD COLUMN bounced_at TIMESTAMP"),
     ]
     async with engine.begin() as conn:
+        # Detect dialect to choose the right column-existence query
+        dialect = conn.dialect.name  # "sqlite" or "postgresql"
         for table, col, ddl in migrations:
             try:
-                # Check if column exists
-                r = await conn.execute(text(f"PRAGMA table_info({table})"))
-                cols = {row[1] for row in r.all()}
+                if dialect == "sqlite":
+                    r = await conn.execute(text(f"PRAGMA table_info({table})"))
+                    cols = {row[1] for row in r.all()}
+                else:
+                    # PostgreSQL — query information_schema
+                    r = await conn.execute(text(
+                        "SELECT column_name FROM information_schema.columns "
+                        f"WHERE table_name='{table}' AND column_name='{col}'"
+                    ))
+                    cols = {row[0] for row in r.all()}
                 if col not in cols:
                     await conn.execute(text(ddl))
             except Exception:
