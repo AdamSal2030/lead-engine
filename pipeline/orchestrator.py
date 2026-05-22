@@ -390,33 +390,43 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                         await asyncio.sleep(settings.RETRY_SITEMAP_SECONDS)
                         continue
 
-                # 2. Process this chunk
-                scrape_tasks = []
-                for url, source in unseen:
-                    scrape_tasks.append(asyncio.create_task(process_one_url(url, source, sem_scrape)))
-
-                for fut in asyncio.as_completed(scrape_tasks):
-                    raw = await fut
-                    _current_batch["scraped"] += 1
-                    if raw:
-                        _current_batch["raw_with_emails"] += 1
-                        t = asyncio.create_task(verify_and_save(raw))
-                        verify_tasks.append(t)
-
-                    if verified_count >= target:
-                        log.info(f"Target {target} reached. Stopping URL queue.")
-                        for sc in scrape_tasks:
-                            if not sc.done():
-                                sc.cancel()
+                # 2. Process URLs in chunks to avoid creating tens-of-thousands of
+                #    asyncio Tasks in memory at once. Each chunk fully completes before
+                #    the next one starts, keeping memory bounded.
+                CHUNK_SIZE = 500
+                target_reached = False
+                for chunk_start in range(0, len(unseen), CHUNK_SIZE):
+                    if target_reached:
                         break
+                    chunk = unseen[chunk_start: chunk_start + CHUNK_SIZE]
+                    scrape_tasks = [
+                        asyncio.create_task(process_one_url(url, source, sem_scrape))
+                        for url, source in chunk
+                    ]
 
-                    if _current_batch["scraped"] % 100 == 0:
-                        el = time.time() - start_time
-                        log.info(
-                            f"  [{_current_batch['scraped']} scraped | "
-                            f"{_current_batch['raw_with_emails']} raw | "
-                            f"{verified_count} verified | {el/60:.1f}min]"
-                        )
+                    for fut in asyncio.as_completed(scrape_tasks):
+                        raw = await fut
+                        _current_batch["scraped"] += 1
+                        if raw:
+                            _current_batch["raw_with_emails"] += 1
+                            t = asyncio.create_task(verify_and_save(raw))
+                            verify_tasks.append(t)
+
+                        if verified_count >= target:
+                            log.info(f"Target {target} reached. Stopping URL queue.")
+                            for sc in scrape_tasks:
+                                if not sc.done():
+                                    sc.cancel()
+                            target_reached = True
+                            break
+
+                        if _current_batch["scraped"] % 100 == 0:
+                            el = time.time() - start_time
+                            log.info(
+                                f"  [{_current_batch['scraped']} scraped | "
+                                f"{_current_batch['raw_with_emails']} raw | "
+                                f"{verified_count} verified | {el/60:.1f}min]"
+                            )
 
             # Wait for any pending verifies
             if verify_tasks:
