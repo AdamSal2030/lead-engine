@@ -78,4 +78,13 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Railway injects DATABASE_URL as "postgresql://..." but SQLAlchemy async needs
+# "postgresql+asyncpg://...". Patch the URL transparently at startup.
+if settings.DATABASE_URL.startswith("postgresql://"):
+    settings.DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif settings.DATABASE_URL.startswith("postgres://"):
+    # Heroku/Railway legacy alias
+    settings.DATABASE_URL = settings.DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+
 os.makedirs(settings.DATA_DIR, exist_ok=True)
