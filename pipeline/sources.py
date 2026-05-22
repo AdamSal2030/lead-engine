@@ -365,31 +365,61 @@ async def designrush_urls(max_pages: int = 5) -> list[str]:
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
-    """Returns dict of source_name -> list of URLs."""
+    """Returns dict of source_name -> list of URLs.
+
+    All sources are fetched CONCURRENTLY (asyncio.gather) so total wall-time
+    ≈ slowest individual source rather than sum-of-all. Each source gets a
+    90-second timeout — long enough for paginated sitemaps, short enough to
+    keep the batch startup snappy.
+    """
     import asyncio as _asyncio
-    out = {}
-    out["canvasrebel"] = await canvasrebel_urls()
-    out["boldjourney"] = await boldjourney_urls()
-    out["valiantceo"] = await valiantceo_urls()
-    out["founderhour"] = await founderhour_urls()
-    out["authority_magazine"] = await authority_magazine_urls()
-    out["brainz_magazine"] = await brainz_urls()
-    out["ideamensch"] = await ideamensch_urls()
+
+    SOURCE_TIMEOUT = 90  # seconds per source
+
+    async def safe(name: str, coro):
+        """Run a source coroutine with a timeout. Returns (name, result)."""
+        try:
+            urls = await _asyncio.wait_for(coro, timeout=SOURCE_TIMEOUT)
+            return name, (urls or [])
+        except _asyncio.TimeoutError:
+            log.warning(f"Source {name} timed out after {SOURCE_TIMEOUT}s")
+            return name, []
+        except Exception as exc:
+            log.warning(f"Source {name} error: {exc}")
+            return name, []
+
+    tasks = []
+    # Core interview sources
+    tasks.append(safe("canvasrebel", canvasrebel_urls()))
+    tasks.append(safe("boldjourney", boldjourney_urls()))
+    tasks.append(safe("valiantceo", valiantceo_urls()))
+    tasks.append(safe("founderhour", founderhour_urls()))
+    tasks.append(safe("authority_magazine", authority_magazine_urls()))
+    tasks.append(safe("brainz_magazine", brainz_urls()))
+    tasks.append(safe("ideamensch", ideamensch_urls()))
+    # Voyage network (32 sites)
     for site in VOYAGE_SITES:
-        out[site.replace(".com", "")] = await voyage_urls(site)
+        tasks.append(safe(site.replace(".com", ""), voyage_urls(site)))
+    # ShoutOut network (5 sites)
     for site in SHOUTOUT_SITES:
-        out[site.replace(".com", "")] = await shoutout_urls(site)
+        tasks.append(safe(site.replace(".com", ""), shoutout_urls(site)))
+    # PR / interview magazine sites
     for site in PR_SITES:
-        out[site.replace(".com", "")] = await wordpress_sitemap_urls(site)
-    # NewsAnchored network: strict slug filter to avoid plain news articles
+        tasks.append(safe(site.replace(".com", ""), wordpress_sitemap_urls(site)))
+    # NewsAnchored network — strict slug filter to avoid plain news articles
     for site in PR_SITES_STRICT:
-        out[site.replace(".com", "")] = await wordpress_sitemap_urls(site, strict=True)
-    # Non-published directory sources (potential feature buyers)
-    out["clutch"] = await clutch_urls()
-    out["indiehackers"] = await indiehackers_urls()
-    out["designrush"] = await designrush_urls()
+        tasks.append(safe(site.replace(".com", ""), wordpress_sitemap_urls(site, strict=True)))
+    # Non-published directory sources
+    tasks.append(safe("clutch", clutch_urls()))
+    tasks.append(safe("indiehackers", indiehackers_urls()))
+    tasks.append(safe("designrush", designrush_urls()))
+
+    results = await _asyncio.gather(*tasks)
+    out = {name: urls for name, urls in results}
+
     total = sum(len(v) for v in out.values())
-    log.info(f"Collected {total} URLs across {len(out)} sources")
+    active = sum(1 for v in out.values() if v)
+    log.info(f"Collected {total} URLs across {active}/{len(out)} active sources")
     return out
 
 
