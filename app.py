@@ -119,6 +119,13 @@ async def cleanup_zombie_batches():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _perpetual_task
+    # Print the public URL so it's easy to find in Railway deployment logs
+    _public_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL", "")
+    if _public_domain:
+        log.info(f"=== LEAD ENGINE STARTING === Public URL: https://{_public_domain} ===")
+    else:
+        log.info("=== LEAD ENGINE STARTING === (set RAILWAY_PUBLIC_DOMAIN to log URL) ===")
+
     # Import modules that declare new tables so init_db() picks them up
     import pipeline.finder  # SkrappCache
     import pipeline.company_resolver  # CompanyDomainCache
