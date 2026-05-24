@@ -201,6 +201,12 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             elif source == "goodfirms":
                 from pipeline.directory_parser import parse_goodfirms_profile
                 parsed = await parse_goodfirms_profile(url)
+            elif source == "g2":
+                from pipeline.directory_parser import parse_g2_product
+                parsed = await parse_g2_product(url)
+            elif source == "capterra":
+                from pipeline.directory_parser import parse_capterra_product
+                parsed = await parse_capterra_product(url)
             else:
                 parsed = await parse_article(url)
 
@@ -329,6 +335,16 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
         start_time = time.time()
 
         try:
+            # ── Re-open the retry pool on every batch start ────────────────────
+            # URLs marked no_parse / no_emails / error are not permanently bad:
+            #   no_parse  → improved regex/Claude may succeed now
+            #   no_emails → website may have added an email, or better patterns find one
+            #   error     → transient scrape failure
+            # Clearing them before each batch gives us a full retry queue instead
+            # of running dry after just the handful of brand-new sitemap entries.
+            retry_cleared = await clear_stuck_seen(include_no_parse=True)
+            log.info(f"  Cleared {retry_cleared} no_parse/no_emails/error URLs for retry")
+
             # Verify concurrency scales with # of Reoon keys
             from pipeline.reoon_pool import get_pool as _pool
             n_keys = max(1, len(_pool()))
@@ -409,7 +425,7 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                 # 2. Process URLs in chunks to avoid creating tens-of-thousands of
                 #    asyncio Tasks in memory at once. Each chunk fully completes before
                 #    the next one starts, keeping memory bounded.
-                CHUNK_SIZE = 500
+                CHUNK_SIZE = 1000
                 target_reached = False
                 for chunk_start in range(0, len(unseen), CHUNK_SIZE):
                     if target_reached:

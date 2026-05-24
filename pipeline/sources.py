@@ -206,7 +206,7 @@ async def ideamensch_urls() -> list[str]:
     """IdeaMensch founder interviews. Thousands of interviews — URL: ideamensch.com/[slug]/
     Each page has a clean H1 with the founder's name and a website link."""
     all_urls = []
-    for n in range(1, 30):
+    for n in range(1, 60):
         text = await fetch(f"https://ideamensch.com/post-sitemap{n}.xml", try_fallbacks=True)
         if not text:
             break
@@ -226,7 +226,7 @@ async def ideamensch_urls() -> list[str]:
     return all_urls
 
 
-async def wordpress_sitemap_urls(site: str, max_pages: int = 10,
+async def wordpress_sitemap_urls(site: str, max_pages: int = 25,
                                   strict: bool = False) -> list[str]:
     """Generic WordPress post-sitemap collector (paginated post-sitemapN.xml).
 
@@ -287,7 +287,7 @@ PR_SITES_STRICT = [
 ]
 
 
-async def clutch_urls(max_pages: int = 5) -> list[str]:
+async def clutch_urls(max_pages: int = 20) -> list[str]:
     """Clutch.co company directory profiles — non-published founders/agency owners.
     Uses the Clutch sitemap to find company profile pages."""
     all_urls = []
@@ -345,7 +345,7 @@ async def indiehackers_urls() -> list[str]:
     return all_urls[:1000]
 
 
-async def designrush_urls(max_pages: int = 5) -> list[str]:
+async def designrush_urls(max_pages: int = 12) -> list[str]:
     """DesignRush agency directory — design, marketing, tech agencies."""
     all_urls = []
     for n in range(1, max_pages + 1):
@@ -364,7 +364,7 @@ async def designrush_urls(max_pages: int = 5) -> list[str]:
     return all_urls[:1000]
 
 
-async def hackernews_showhn_urls(limit: int = 400) -> list[str]:
+async def hackernews_showhn_urls(limit: int = 600) -> list[str]:
     """Hacker News 'Show HN' posts — founders showing real products they built.
 
     Uses the public HN Firebase REST API (no auth, no credits). Each story
@@ -388,7 +388,7 @@ async def hackernews_showhn_urls(limit: int = 400) -> list[str]:
         return []
 
 
-async def betalist_urls(max_pages: int = 8) -> list[str]:
+async def betalist_urls(max_pages: int = 20) -> list[str]:
     """BetaList startup directory — pre-launch startups with founder websites.
 
     BetaList publishes an RSS feed and has individual startup pages. Each
@@ -430,7 +430,81 @@ async def betalist_urls(max_pages: int = 8) -> list[str]:
     return all_urls[:500]
 
 
-async def goodfirms_urls(max_pages: int = 5) -> list[str]:
+async def g2_urls(max_pages: int = 30) -> list[str]:
+    """G2 software review directory — tens of thousands of SaaS/software company pages.
+
+    Each G2 product page has the company's website URL in a "Visit Website" CTA.
+    parse_g2_product() in directory_parser extracts company name + website.
+    No Claude needed.
+    """
+    all_urls = []
+    # G2 product sitemaps: sitemap_products_N.xml
+    for n in range(1, max_pages + 1):
+        text = await fetch(f"https://www.g2.com/sitemap_products_{n}.xml", try_fallbacks=True)
+        if not text:
+            # Try generic sitemap index first
+            if n == 1:
+                idx = await fetch("https://www.g2.com/sitemap.xml", try_fallbacks=True)
+                if idx:
+                    sub = re.findall(r"<loc>([^<]*product[^<]*)</loc>", idx)
+                    for sm in sub[:max_pages]:
+                        sm_text = await fetch(sm, try_fallbacks=True)
+                        if sm_text:
+                            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
+                            filtered = [u for u in urls
+                                        if re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+/reviews/?$", u)
+                                        or re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+/?$", u)]
+                            all_urls.extend(filtered)
+            break
+        urls = re.findall(r"<loc>([^<]+)</loc>", text)
+        filtered = [u for u in urls
+                    if re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+(?:/reviews)?/?$", u)]
+        all_urls.extend(filtered)
+        if not filtered:
+            break
+    all_urls = list(dict.fromkeys(all_urls))
+    log.info(f"G2: found {len(all_urls)} product URLs")
+    return all_urls[:5000]
+
+
+async def capterra_urls(max_pages: int = 20) -> list[str]:
+    """Capterra software directory — similar to G2, tens of thousands of products.
+
+    Each product page has a company website link. No Claude needed.
+    """
+    all_urls = []
+    text = await fetch("https://www.capterra.com/sitemap.xml", try_fallbacks=True)
+    if text:
+        sub = re.findall(r"<loc>([^<]+)</loc>", text)
+        product_sitemaps = [u for u in sub if "product" in u.lower() or "software" in u.lower()]
+        for sm in product_sitemaps[:max_pages]:
+            sm_text = await fetch(sm, try_fallbacks=True)
+            if not sm_text:
+                continue
+            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
+            filtered = [u for u in urls
+                        if re.match(r"https://www\.capterra\.com/p/\d+/[a-zA-Z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+    # Direct paginated fallback
+    if not all_urls:
+        for n in range(1, max_pages + 1):
+            text = await fetch(
+                f"https://www.capterra.com/sitemap_products_{n}.xml", try_fallbacks=True
+            )
+            if not text:
+                break
+            urls = re.findall(r"<loc>([^<]+)</loc>", text)
+            filtered = [u for u in urls
+                        if re.match(r"https://www\.capterra\.com/p/\d+/[a-zA-Z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+            if not filtered:
+                break
+    all_urls = list(dict.fromkeys(all_urls))
+    log.info(f"Capterra: found {len(all_urls)} product URLs")
+    return all_urls[:5000]
+
+
+async def goodfirms_urls(max_pages: int = 15) -> list[str]:
     """GoodFirms company directory — IT and software agencies with founder info.
 
     Similar to Clutch but covers a different pool of agencies. Has a public
@@ -519,6 +593,8 @@ async def collect_all_urls() -> dict[str, list[str]]:
     tasks.append(safe("hackernews", hackernews_showhn_urls()))
     tasks.append(safe("betalist", betalist_urls()))
     tasks.append(safe("goodfirms", goodfirms_urls()))
+    tasks.append(safe("g2", g2_urls()))
+    tasks.append(safe("capterra", capterra_urls()))
 
     results = await _asyncio.gather(*tasks)
     out = {name: urls for name, urls in results}
@@ -580,6 +656,8 @@ def source_label(url: str) -> str:
     if "news.ycombinator.com" in url: return "HackerNews"
     if "betalist.com" in url: return "BetaList"
     if "goodfirms.co" in url: return "GoodFirms"
+    if "g2.com" in url: return "G2"
+    if "capterra.com" in url: return "Capterra"
     for s in SHOUTOUT_SITES:
         if s in url:
             return s.replace(".com", "").replace("shoutout", "ShoutOut").title()

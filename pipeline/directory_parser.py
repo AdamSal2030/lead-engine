@@ -408,6 +408,140 @@ async def parse_goodfirms_profile(url: str) -> dict | None:
     }
 
 
+async def parse_g2_product(url: str) -> dict | None:
+    """Parse a G2 software product page.
+
+    G2 product pages list the company name, category, and have a 'Visit Website'
+    button with the company's real website URL. No Claude needed.
+    """
+    html = await fetch(url)
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "lxml")
+    title_el = soup.find("h1")
+    company_name = title_el.get_text(strip=True) if title_el else ""
+    if not company_name:
+        return None
+
+    # G2 has a prominent "Visit Website" / "Visit x.com" link
+    website = None
+    for a in soup.find_all("a", href=True):
+        h = (a.get("href") or "").strip()
+        text = a.get_text(strip=True).lower()
+        if not h.startswith("http"):
+            continue
+        link_domain = h.split("/")[2].lower() if "//" in h else ""
+        if "g2.com" in link_domain:
+            continue
+        if any(s in link_domain for s in SOCIALS | SELF_HOSTS):
+            continue
+        if any(kw in text for kw in ("visit website", "visit", "get started", "free trial", "try free")):
+            website = h.split("?")[0].rstrip("/")
+            break
+    if not website:
+        website = _extract_website(soup, url)
+    if not website:
+        return None
+
+    body_text = soup.get_text(" ", strip=True)
+    person_name = None
+    for pat in [
+        r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
+        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|President)",
+    ]:
+        nm = re.search(pat, body_text)
+        if nm:
+            from pipeline.parser import _try_parse_segment
+            candidate = _try_parse_segment(nm.group(1))
+            if candidate:
+                person_name = candidate
+                break
+
+    from pipeline.niche import classify
+
+    return {
+        "source_url": url,
+        "source": "G2",
+        "name": person_name or company_name,
+        "website": website,
+        "role": "Founder",
+        "company": company_name,
+        "niche": classify(None, company_name, None, website),
+        "hook": "",
+        "article_emails": [],
+        "_parsed_by": "directory",
+        "_is_company": person_name is None,
+    }
+
+
+async def parse_capterra_product(url: str) -> dict | None:
+    """Parse a Capterra software product page.
+
+    Similar to G2 — each product page has a company name, category, and a
+    direct link to the company website.
+    """
+    html = await fetch(url)
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "lxml")
+    title_el = soup.find("h1")
+    company_name = title_el.get_text(strip=True) if title_el else ""
+    if not company_name:
+        return None
+
+    # Capterra has "Visit Website" CTA
+    website = None
+    for a in soup.find_all("a", href=True):
+        h = (a.get("href") or "").strip()
+        text = a.get_text(strip=True).lower()
+        if not h.startswith("http"):
+            continue
+        link_domain = h.split("/")[2].lower() if "//" in h else ""
+        if "capterra.com" in link_domain or "gartner.com" in link_domain:
+            continue
+        if any(s in link_domain for s in SOCIALS | SELF_HOSTS):
+            continue
+        if any(kw in text for kw in ("visit website", "visit", "get started", "free trial", "try")):
+            website = h.split("?")[0].rstrip("/")
+            break
+    if not website:
+        website = _extract_website(soup, url)
+    if not website:
+        return None
+
+    body_text = soup.get_text(" ", strip=True)
+    person_name = None
+    for pat in [
+        r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
+        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|President)",
+    ]:
+        nm = re.search(pat, body_text)
+        if nm:
+            from pipeline.parser import _try_parse_segment
+            candidate = _try_parse_segment(nm.group(1))
+            if candidate:
+                person_name = candidate
+                break
+
+    from pipeline.niche import classify
+
+    return {
+        "source_url": url,
+        "source": "Capterra",
+        "name": person_name or company_name,
+        "website": website,
+        "role": "Founder",
+        "company": company_name,
+        "niche": classify(None, company_name, None, website),
+        "hook": "",
+        "article_emails": [],
+        "_parsed_by": "directory",
+        "_is_company": person_name is None,
+    }
+
+
 async def parse_designrush_profile(url: str) -> dict | None:
     """Parse a DesignRush agency profile."""
     html = await fetch(url)

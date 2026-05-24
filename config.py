@@ -34,24 +34,24 @@ class Settings(BaseSettings):
 
     # Perpetual loop — keeps running forever, one batch after another
     PERPETUAL_ENABLED: bool = True
-    BATCH_SIZE: int = 500            # starting target — auto-grows from here
-    BATCH_SIZE_MAX: int = 3000       # ceiling
-    BATCH_SIZE_GROWTH: int = 250     # +N each successful batch (until cap)
+    BATCH_SIZE: int = 2000           # target 2000 verified leads per batch
+    BATCH_SIZE_MAX: int = 5000       # ceiling
+    BATCH_SIZE_GROWTH: int = 500     # +N each successful batch (until cap)
     BETWEEN_BATCH_SECONDS: int = 5
-    EXHAUSTED_RETRY_SECONDS: int = 300   # 5 min — re-check sitemaps for new articles
+    EXHAUSTED_RETRY_SECONDS: int = 180   # 3 min — re-check sitemaps for new articles
 
     # Batch persistence — keep running until target hit
     PARTIAL_BATCHES: bool = True     # deliver partial batch when pool is empty rather than waiting
-    BATCH_MAX_HOURS: int = 4         # deliver partial after this many hours regardless
-    RETRY_SITEMAP_SECONDS: int = 300  # wait 5 min then re-fetch sitemaps mid-batch
-    MAX_WAIT_ITERATIONS: int = 2     # break after 2 × 5min = 10min total waiting
+    BATCH_MAX_HOURS: int = 6         # deliver partial after this many hours regardless
+    RETRY_SITEMAP_SECONDS: int = 180  # wait 3 min then re-fetch sitemaps mid-batch
+    MAX_WAIT_ITERATIONS: int = 3     # break after 3 × 3min = 9min total waiting
 
     # Backwards-compat
-    DEFAULT_TARGET: int = 500
-    MAX_VERIFY_CONCURRENCY: int = 30     # MV handles 1000 RPM → 30 concurrent is comfortable
-    SCRAPE_CONCURRENCY: int = 10         # keep below Railway memory ceiling + respect robots
-    EMAIL_FIND_CONCURRENCY: int = 5      # parallel page fetches per founder website
-    SKRAPP_CONCURRENCY: int = 5          # parallel Skrapp calls (25k credits — can go higher)
+    DEFAULT_TARGET: int = 2000
+    MAX_VERIFY_CONCURRENCY: int = 50     # MV handles 1000 RPM → 50 concurrent fine
+    SCRAPE_CONCURRENCY: int = 25         # Railway 512MB+ can handle 25 concurrent scrapes
+    EMAIL_FIND_CONCURRENCY: int = 8      # parallel page fetches per founder website
+    SKRAPP_CONCURRENCY: int = 8          # parallel Skrapp calls
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"

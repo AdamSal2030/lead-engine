@@ -683,8 +683,12 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
         if isinstance(html, str):
             all_emails |= extract_emails(html)
 
-    # Generate pattern emails if nothing found
-    if not all_emails and founder_name:
+    # ALWAYS generate personal pattern emails (L3).
+    # We do this even when L2 already found emails — L2 often scrapes generic
+    # role addresses (info@, contact@) that fail verification on catch-all domains.
+    # Personal patterns (jane@domain, j.smith@domain …) rank before generics in
+    # rank_emails(), so the founder's real address is tried first.
+    if founder_name:
         parts = founder_name.lower().replace(".", "").split()
         if len(parts) >= 2:
             first = re.sub(r"[^a-z]", "", parts[0])
@@ -693,9 +697,19 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
                 domain = parsed.netloc.replace("www.", "")
                 if domain and "." in domain and len(domain) < 50:
                     if not any(b in domain for b in HOST_BUILDERS):
-                        all_emails.add(f"{first}@{domain}")
-                        all_emails.add(f"{first}.{last}@{domain}")
-                        all_emails.add(f"{first}{last}@{domain}")
+                        f1 = first[0]     # first initial
+                        l1 = last[0]      # last initial
+                        # 10 patterns — cover the most common corporate email formats
+                        all_emails.add(f"{first}@{domain}")           # jane@
+                        all_emails.add(f"{first}.{last}@{domain}")    # jane.smith@
+                        all_emails.add(f"{first}{last}@{domain}")     # janesmith@
+                        all_emails.add(f"{f1}{last}@{domain}")        # jsmith@
+                        all_emails.add(f"{f1}.{last}@{domain}")       # j.smith@
+                        all_emails.add(f"{last}@{domain}")            # smith@
+                        all_emails.add(f"{last}.{first}@{domain}")    # smith.jane@
+                        all_emails.add(f"{first}_{last}@{domain}")    # jane_smith@
+                        all_emails.add(f"{first}.{l1}@{domain}")      # jane.s@
+                        # Generic fallbacks (lower rank — tried only if personal fail)
                         all_emails.add(f"hello@{domain}")
                         all_emails.add(f"info@{domain}")
 
