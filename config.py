@@ -38,13 +38,13 @@ class Settings(BaseSettings):
     BATCH_SIZE_MAX: int = 3000       # ceiling
     BATCH_SIZE_GROWTH: int = 250     # +N each successful batch (until cap)
     BETWEEN_BATCH_SECONDS: int = 5
-    EXHAUSTED_RETRY_SECONDS: int = 1800  # 30 min instead of 1 hour
+    EXHAUSTED_RETRY_SECONDS: int = 300   # 5 min — re-check sitemaps for new articles
 
     # Batch persistence — keep running until target hit
-    PARTIAL_BATCHES: bool = False    # False = wait for new URLs; True = finish at pool exhaustion
-    BATCH_MAX_HOURS: int = 6         # safety net: deliver partial after this much wall-time
-    RETRY_SITEMAP_SECONDS: int = 1800  # if pool dries mid-batch, refetch sitemaps after this
-    MAX_WAIT_ITERATIONS: int = 3     # break out after N × RETRY_SITEMAP_SECONDS of exhaustion
+    PARTIAL_BATCHES: bool = True     # deliver partial batch when pool is empty rather than waiting
+    BATCH_MAX_HOURS: int = 4         # deliver partial after this many hours regardless
+    RETRY_SITEMAP_SECONDS: int = 300  # wait 5 min then re-fetch sitemaps mid-batch
+    MAX_WAIT_ITERATIONS: int = 2     # break after 2 × 5min = 10min total waiting
 
     # Backwards-compat
     DEFAULT_TARGET: int = 500

@@ -159,21 +159,29 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
 
 def _try_parse_segment(seg: str) -> str | None:
     """Lower-level: try to clean one candidate segment into a real name. Returns name or None."""
-    name = seg
+    name = seg.strip()
     # Strip possessive 's, credentials, suffixes
-    name = re.sub(r"[‘’]s\b.*", "", name)
-    name = re.sub(r",\s*(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\b.*",
-                  "", name, flags=re.IGNORECASE)
+    name = re.sub(r"['']s\b.*", "", name)
+    # Strip comma-separated role/credential anywhere after first two words
+    # e.g. "Jane Smith, CEO" → "Jane Smith" | "John Doe, Ph.D." → "John Doe"
+    name = re.sub(r",\s*\S.*$", "", name).strip()
+    # Strip standalone credential abbreviations
+    name = re.sub(r"\s+(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\s*$",
+                  "", name, flags=re.IGNORECASE).strip()
     # Strip honorifics
     name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach|DJ)\s+",
                   "", name, flags=re.IGNORECASE)
     # Strip trailing role / title words
-    name = re.sub(r"\s+(Photographer|Designer|Founder|CEO|Owner|Author|Artist|Coach|"
-                  r"Consultant|Entrepreneur|Director|President|Esthetician|Therapist|"
-                  r"novelist|Filmmaker|Chef|Doctor|Lawyer|Realtor|Stylist|Influencer)\s*$",
-                  "", name, flags=re.IGNORECASE)
-    # Cut at " of/from/on/at/with/in "
-    name = re.split(r"\s+(?:of|from|on|at|with|in)\s+", name, flags=re.IGNORECASE)[0].strip()
+    name = re.sub(r"\s+(?:Photographer|Designer|Founder|Co-Founder|CEO|COO|CFO|CTO|CMO|"
+                  r"Owner|Author|Artist|Coach|Consultant|Entrepreneur|Director|President|"
+                  r"Esthetician|Therapist|Novelist|Filmmaker|Chef|Doctor|Lawyer|Attorney|"
+                  r"Realtor|Stylist|Influencer|Speaker|Trainer|Blogger|Podcaster|"
+                  r"Freelancer|Developer|Engineer|Architect|Nurse|Professor)\s*$",
+                  "", name, flags=re.IGNORECASE).strip()
+    # Cut at " of/from/on/at/with/in/and "
+    name = re.split(r"\s+(?:of|from|on|at|with|in|and|&)\s+", name, flags=re.IGNORECASE)[0].strip()
+    # Strip any trailing punctuation
+    name = name.rstrip(".,;:-—")
 
     # Normalize ALL-CAPS or all-lowercase
     if name == name.upper() or name == name.lower():
@@ -186,7 +194,7 @@ def _try_parse_segment(seg: str) -> str | None:
         return None
     if any(w.lower().rstrip(".") in NON_PERSON for w in words):
         return None
-    if any(c in name for c in '"”“'):
+    if any(c in name for c in '"""'):
         return None
     for w in words:
         if len(w) == 1 and w.isupper(): continue
@@ -207,12 +215,24 @@ def clean_name(title_text: str) -> str | None:
         if re.search(pat, name, re.IGNORECASE):
             return None
 
-    # Strip leading interview-style prefixes
-    for prefix in ["Meet ", "Inspiring Conversations with ", "Conversations with ",
-                   "Life & Work with ", "Hidden Gems: Meet ", "Daily Inspiration: Meet ",
-                   "Exclusive Interview with ", "Interview with ", "Artist of the Day: ",
-                   "Featured Founder: ", "Founder Spotlight: "]:
-        if name.startswith(prefix):
+    # Strip leading interview-style prefixes (case-insensitive)
+    PREFIXES = [
+        "Meet ", "Inspiring Conversations with ", "Conversations with ",
+        "Life & Work with ", "Hidden Gems: Meet ", "Daily Inspiration: Meet ",
+        "Exclusive Interview with ", "Interview with ", "Artist of the Day: ",
+        "Featured Founder: ", "Founder Spotlight: ", "Spotlight on ",
+        "Getting to Know ", "Get to Know ", "Catching Up with ",
+        "In Conversation with ", "A Conversation with ", "We Sat Down with ",
+        "Check Out ", "Introducing ", "Meet the Founder: ", "Founder Feature: ",
+        "CEO Spotlight: ", "Rising Star: ", "Community Spotlight: ",
+        "Entrepreneur Spotlight: ", "Business Spotlight: ", "Q&A with ",
+        "An Interview with ", "Today we'd like to introduce you to ",
+        "Today we're proud to present ", "Today we're thrilled to present ",
+        "We had the pleasure of interviewing ",
+    ]
+    name_lower = name.lower()
+    for prefix in PREFIXES:
+        if name_lower.startswith(prefix.lower()):
             name = name[len(prefix):]
             break
 
@@ -229,20 +249,73 @@ def clean_name(title_text: str) -> str | None:
     return None
 
 
+_WEBSITE_JUNK_SUBSTR = [
+    # Ad/analytics/CDN
+    "google", "facebook", "doubleclick", "googletagmanager", "google-analytics",
+    "googleapis", "gstatic", "cloudflare", "amazonaws", "cloudfront", "akamai",
+    "cdn.", "static.", "assets.", "tracking.", "analytics.", "pixel.", "ingest.",
+    # Payments/CRM/tools that aren't the founder's site
+    "stripe.com", "paypal.com", "typeform.com", "jotform.com", "mailchimp.com",
+    "hubspot.com", "calendly.com", "eventbrite.com", "gofundme.com", "patreon.com",
+    "substack.com", "beehiiv.com", "convertkit.com", "activecampaign.com",
+    "clickfunnels.com", "kajabi.com", "teachable.com", "thinkific.com",
+    "shopify.com", "squarespace.com", "wix.com", "wixsite.com", "weebly.com",
+    "godaddy.com", "namecheap.com", "wordpress.com", "blogspot.com",
+    # Media / aggregator sites (they write about the founder, not the founder's site)
+    "forbes.com", "inc.com", "entrepreneur.com", "techcrunch.com", "medium.com",
+    "linkedin.com", "twitter.com", "x.com", "instagram.com", "facebook.com",
+    "youtube.com", "tiktok.com", "pinterest.com", "yelp.com", "amazon.com",
+    # Misc junk
+    "bit.ly", "tinyurl.com", "goo.gl", "t.co", "linktr.ee", "beacons.ai",
+    "stan.store", "carrd.co", "notion.so", "airtable.com",
+]
+
+
 def find_website(body, body_text: str, page_url: str) -> str | None:
+    """Find the founder's personal/business website URL in the article.
+
+    Priority:
+    1. Explicitly labelled website fields ("Website:", "Personal Website:", etc.)
+    2. First clean external link — filtered aggressively to exclude junk/tools/media
+    """
+    # 1. Labelled website field (highest precision)
     for label in ["Personal Website:", "Website:", "Website : ",
                   "Business Website:", "Company Website:", "Web:"]:
-        m = re.search(rf"{label}\s*([^\s\n,]+)", body_text)
+        m = re.search(rf"{label}\s*([^\s\n,<>\"']+)", body_text)
         if m:
-            w = m.group(1).strip().rstrip(".,;")
-            if "." in w and " " not in w and len(w) < 80:
+            w = m.group(1).strip().rstrip(".,;)/")
+            if "." in w and " " not in w and 8 < len(w) < 80:
                 return w if w.startswith("http") else "https://" + w
 
+    # 2. External links — filter aggressively
+    page_domain = page_url.split("/")[2].lower() if page_url.startswith("http") else ""
+
+    candidates = []
     for a in body.find_all("a", href=True):
         h = a["href"].strip()
-        if h.startswith("http") and not any(s in h.lower() for s in SOCIALS):
-            if page_url.split("/")[2] in h: continue
-            return h.split("?")[0].split("#")[0]
+        if not h.startswith("http"):
+            continue
+        h_clean = h.split("?")[0].split("#")[0].rstrip("/")
+        h_lower = h_clean.lower()
+
+        # Skip same-domain links (back-links to interview site)
+        link_domain = h_clean.split("/")[2].lower() if h_clean.startswith("http") else ""
+        if page_domain and page_domain in link_domain:
+            continue
+        # Skip social media
+        if any(s in link_domain for s in SOCIALS):
+            continue
+        # Skip known junk/tool/media domains
+        if any(j in link_domain for j in _WEBSITE_JUNK_SUBSTR):
+            continue
+        # Must look like a real domain (not a path-only or bare word)
+        if "." not in link_domain or len(link_domain) < 4:
+            continue
+        candidates.append(h_clean)
+
+    # Return first clean candidate
+    if candidates:
+        return candidates[0]
     return None
 
 

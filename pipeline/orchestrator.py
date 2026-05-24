@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime
 from sqlalchemy import select, func, update
@@ -211,22 +212,28 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             # Combine, dedupe, rank
             combined = list(set(article_emails + website_emails))
 
-            # Decide if we need Skrapp (L4): no emails OR only generics
+            # Decide if we need Skrapp (L4).
+            # Only skip Skrapp if we already have a HIGH-CONFIDENCE personal email:
+            #   - A free-provider email (gmail, yahoo, etc.) — founder uses personal address
+            #   - OR an email where the local part contains the founder's first or last name
+            # Don't skip just because we have ANY non-generic email — "founders@acme.com"
+            # or "newsletter@acme.com" are not good enough to skip Skrapp.
+            _founder_parts = [p.lower() for p in parsed["name"].split()] if parsed.get("name") else []
+            _first_n = re.sub(r"[^a-z]", "", _founder_parts[0]) if _founder_parts else ""
+            _last_n = re.sub(r"[^a-z]", "", _founder_parts[-1]) if len(_founder_parts) > 1 else ""
+            FREE_PROVIDERS = {"gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
+                              "aol.com","protonmail.com","proton.me","live.com","msn.com",
+                              "me.com","mac.com","fastmail.com","pm.me","zoho.com"}
             need_skrapp = True
-            if combined:
-                # If we have ANY personal-looking or free-provider email, we're good
-                has_personal = False
-                for e in combined:
-                    local, _, dom = e.partition("@")
-                    if dom in {"gmail.com","yahoo.com","outlook.com","hotmail.com","icloud.com",
-                               "aol.com","protonmail.com","proton.me","live.com","msn.com",
-                               "me.com","mac.com"}:
-                        has_personal = True; break
-                    if local.lower() not in {"info","hello","contact","support","team","admin",
-                                              "office","sales","help","press","media"}:
-                        has_personal = True; break
-                if has_personal:
-                    need_skrapp = False
+            for e in combined:
+                local_e, _, dom_e = e.partition("@")
+                local_lower = local_e.lower()
+                if dom_e in FREE_PROVIDERS:
+                    need_skrapp = False; break
+                if _first_n and len(_first_n) >= 3 and _first_n in local_lower:
+                    need_skrapp = False; break
+                if _last_n and len(_last_n) >= 3 and _last_n in local_lower:
+                    need_skrapp = False; break
 
             # Extract domain once for L4 + L5
             _words = parsed["name"].split()

@@ -116,37 +116,33 @@ async def cleanup_zombie_batches():
         log.info(f"Regenerated CSVs for {regenerated} batch(es) with orphaned leads.")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _perpetual_task
-    # Print the public URL so it's easy to find in Railway deployment logs
-    _public_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL", "")
-    if _public_domain:
-        log.info(f"=== LEAD ENGINE STARTING === Public URL: https://{_public_domain} ===")
-    else:
-        log.info("=== LEAD ENGINE STARTING === (set RAILWAY_PUBLIC_DOMAIN to log URL) ===")
+async def _startup_background():
+    """Heavy startup tasks run as a background task so the server can start serving
+    immediately (health check passes). Runs once after the event loop is running."""
+    # Small delay so the main loop is fully up before we hit the DB
+    await asyncio.sleep(2)
 
-    # Import modules that declare new tables so init_db() picks them up
-    import pipeline.finder  # SkrappCache
-    import pipeline.company_resolver  # CompanyDomainCache
-    await init_db()
     # Load persistent verifier counters
-    from pipeline.verifier import _load_counter
-    await _load_counter()
-    from pipeline.finder import _load_counter as _sk_load
-    await _sk_load()
-    from pipeline.mv_verifier import _load_counter as _mv_load
-    await _mv_load()
+    try:
+        from pipeline.verifier import _load_counter
+        await _load_counter()
+        from pipeline.finder import _load_counter as _sk_load
+        await _sk_load()
+        from pipeline.mv_verifier import _load_counter as _mv_load
+        await _mv_load()
+    except Exception as e:
+        log.warning(f"Counter load failed: {e}")
+
+    # Mark orphaned batches as interrupted, regenerate missing CSVs
     try:
         await asyncio.wait_for(cleanup_zombie_batches(), timeout=30)
     except asyncio.TimeoutError:
-        log.warning("cleanup_zombie_batches() timed out after 30s — skipping.")
+        log.warning("cleanup_zombie_batches() timed out — skipping.")
     except Exception as e:
         log.warning(f"cleanup_zombie_batches() failed: {e} — skipping.")
 
-    # If Claude parser is configured, clear no_parse URLs so they get a Claude attempt.
-    # We do this at most once every 7 days (keyed by ISO week) — on each deploy and
-    # weekly thereafter — so the no_parse backlog stays fresh without over-spending.
+    # If Claude parser is configured, clear no_parse URLs so they get retried.
+    # Runs at most once per ISO week per persistent DB.
     if settings.ANTHROPIC_API_KEY and settings.CLAUDE_PARSE_ENABLED:
         try:
             from datetime import date as _date
@@ -159,9 +155,8 @@ async def lifespan(app: FastAPI):
             if _marker is None:
                 from pipeline.orchestrator import clear_no_parse_seen
                 from db import Counter
-                cleared = await asyncio.wait_for(clear_no_parse_seen(), timeout=60)
+                cleared = await asyncio.wait_for(clear_no_parse_seen(), timeout=120)
                 async with SessionLocal() as _s:
-                    # Clean up old week markers to keep counter table small
                     await _s.execute(_sql_text("DELETE FROM counters WHERE key LIKE 'no_parse_cleared_%'"))
                     _s.add(Counter(key=_week_key, value=1))
                     await _s.commit()
@@ -169,9 +164,32 @@ async def lifespan(app: FastAPI):
             else:
                 log.info(f"no_parse already cleared this week ({_week_key}) — skipping.")
         except asyncio.TimeoutError:
-            log.warning("Weekly no_parse clear timed out after 60s — will retry on pool exhaustion.")
+            log.warning("Weekly no_parse clear timed out — will retry on pool exhaustion.")
         except Exception as e:
             log.warning(f"Weekly no_parse clear failed: {e} — will retry on pool exhaustion.")
+
+    log.info("Background startup complete.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _perpetual_task
+    # Print the public URL for easy discovery in Railway deployment logs
+    _public_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL", "")
+    if _public_domain:
+        log.info(f"=== LEAD ENGINE STARTING === https://{_public_domain} ===")
+    else:
+        log.info("=== LEAD ENGINE STARTING ===")
+
+    # Import modules that declare new tables so init_db() picks them up
+    import pipeline.finder  # SkrappCache
+    import pipeline.company_resolver  # CompanyDomainCache
+
+    # init_db is the only thing that MUST run before we serve requests
+    await init_db()
+
+    # Everything else runs in the background so the health check passes immediately
+    asyncio.create_task(_startup_background())
 
     if settings.PERPETUAL_ENABLED:
         _perpetual_task = asyncio.create_task(perpetual_loop())
@@ -192,6 +210,7 @@ async def lifespan(app: FastAPI):
         log.info("Intelligence loop scheduled (first run in 2h).")
 
     yield
+
     if _perpetual_task and not _perpetual_task.done():
         _perpetual_task.cancel()
     if _unibox_task and not _unibox_task.done():
