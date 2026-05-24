@@ -192,6 +192,15 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             elif source == "indiehackers":
                 from pipeline.directory_parser import parse_indiehackers_profile
                 parsed = await parse_indiehackers_profile(url)
+            elif source == "hackernews":
+                from pipeline.directory_parser import parse_hn_showhn
+                parsed = await parse_hn_showhn(url)
+            elif source == "betalist":
+                from pipeline.directory_parser import parse_betalist_startup
+                parsed = await parse_betalist_startup(url)
+            elif source == "goodfirms":
+                from pipeline.directory_parser import parse_goodfirms_profile
+                parsed = await parse_goodfirms_profile(url)
             else:
                 parsed = await parse_article(url)
 

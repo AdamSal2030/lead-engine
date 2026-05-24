@@ -61,25 +61,19 @@ def _get_client():
 
 
 SYSTEM_PROMPT = """\
-You are a lead-data extraction assistant. Given a page title, meta description, and article text from an entrepreneur/founder/professional interview or profile page, extract structured data about the featured person.
+Extract structured data from a founder/entrepreneur interview page. Return ONLY a JSON object.
 
-Return ONLY a single JSON object — no markdown, no explanation, just JSON.
+Keys (all strings):
+- "name": Full name, 2-4 words, properly capitalised. Real person only.
+- "company": Business name (empty string if unclear).
+- "website": Business website URL. NOT social media, NOT linktr.ee, NOT the interview site.
+- "role": e.g. "Founder","CEO","Owner","Coach","Consultant","Designer","Photographer","Author".
+- "niche": 2-4 word label e.g. "Marketing Agency","Life Coaching","SaaS","Real Estate".
+- "hook": One specific achievement/quote from the article for cold outreach (≤25 words).
 
-Keys:
-- "name": Full name of the featured person (2-4 words, properly capitalised, e.g. "Jane Smith"). Must look like a real person's name, not a company or article title.
-- "company": Their business / company name (string, may be empty if unclear).
-- "website": Their personal business website URL. Must be a real domain — NOT social media (instagram, facebook, linkedin, twitter, youtube, tiktok), NOT linktr.ee, NOT the interview site itself.
-- "role": Primary role — e.g. "Founder", "CEO", "Owner", "Coach", "Consultant", "Agency Owner", "Designer", "Photographer", "Author", "Therapist", "Realtor", "Attorney", "Chef".
-- "niche": 2–4 word industry/niche label — e.g. "Marketing Agency", "Life Coaching", "E-commerce", "SaaS", "Real Estate", "Fitness", "Photography", "Financial Planning", "Interior Design", "PR Agency", "Recruiting", "Wedding Planning", "Graphic Design", "Consulting", "Legal Services".
-- "hook": One concrete personalisation sentence pulled directly from the article — something specific they said or achieved. Use for cold outreach icebreaker. Example: "Your piece mentioned scaling your coaching practice to 60 clients in under a year — impressive trajectory."
+If you cannot find BOTH name AND website: {"skip": true}
 
-If you cannot confidently find BOTH "name" AND "website" return exactly: {"skip": true}
-
-Hard rules:
-- website must start with http or be a bare domain (you may normalise to https://)
-- website must NOT be a social platform or link aggregator
-- name must be 2–4 capitalised words that look like a real person
-- hook must be specific to this person, not a generic sentence
+Rules: website must be a real domain starting with http (normalise bare domains to https://). Name must look like a real person.
 """
 
 
@@ -98,7 +92,7 @@ async def parse_with_claude(url: str, clean_text: str) -> dict | None:
         _increment_call()
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=350,
+            max_tokens=150,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": clean_text}],
         )

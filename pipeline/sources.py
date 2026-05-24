@@ -364,6 +364,108 @@ async def designrush_urls(max_pages: int = 5) -> list[str]:
     return all_urls[:1000]
 
 
+async def hackernews_showhn_urls(limit: int = 400) -> list[str]:
+    """Hacker News 'Show HN' posts — founders showing real products they built.
+
+    Uses the public HN Firebase REST API (no auth, no credits). Each story
+    includes the product URL (the founder's actual website) and their HN
+    username. directory_parser.parse_hn_showhn() handles extraction.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20, headers=HEADERS) as client:
+            r = await client.get(
+                "https://hacker-news.firebaseio.com/v0/showstories.json"
+            )
+            if r.status_code != 200:
+                log.warning(f"HN ShowHN API returned {r.status_code}")
+                return []
+            ids = r.json()[:limit]
+            urls = [f"https://news.ycombinator.com/item?id={sid}" for sid in ids]
+            log.info(f"HN ShowHN: found {len(urls)} stories")
+            return urls
+    except Exception as e:
+        log.warning(f"HN ShowHN error: {e}")
+        return []
+
+
+async def betalist_urls(max_pages: int = 8) -> list[str]:
+    """BetaList startup directory — pre-launch startups with founder websites.
+
+    BetaList publishes an RSS feed and has individual startup pages. Each
+    startup page has a direct link to the founder's product/company site.
+    """
+    all_urls = []
+    # Try RSS first (structured, reliable)
+    try:
+        text = await fetch("https://betalist.com/startups.rss", try_fallbacks=True)
+        if text:
+            urls = re.findall(r"<link>([^<]+)</link>", text)
+            filtered = [u.strip() for u in urls
+                        if re.match(r"https://betalist\.com/startups/[a-z0-9\-]+/?$", u.strip())]
+            all_urls.extend(filtered)
+    except Exception:
+        pass
+    # Sitemap fallback
+    if not all_urls:
+        text = await fetch("https://betalist.com/sitemap.xml", try_fallbacks=True)
+        if text:
+            urls = re.findall(r"<loc>([^<]+)</loc>", text)
+            filtered = [u for u in urls
+                        if re.match(r"https://betalist\.com/startups/[a-z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+    # Paginated browse pages as last resort
+    if not all_urls:
+        for n in range(1, max_pages + 1):
+            suffix = f"?page={n}" if n > 1 else ""
+            text = await fetch(f"https://betalist.com/startups{suffix}", try_fallbacks=True)
+            if not text:
+                break
+            found = re.findall(r'href="(/startups/[a-z0-9\-]+)"', text)
+            page_urls = [f"https://betalist.com{slug}" for slug in set(found)]
+            all_urls.extend(page_urls)
+            if not found:
+                break
+    all_urls = list(dict.fromkeys(all_urls))  # dedupe preserving order
+    log.info(f"BetaList: found {len(all_urls)} URLs")
+    return all_urls[:500]
+
+
+async def goodfirms_urls(max_pages: int = 5) -> list[str]:
+    """GoodFirms company directory — IT and software agencies with founder info.
+
+    Similar to Clutch but covers a different pool of agencies. Has a public
+    sitemap with company profile pages.
+    """
+    all_urls = []
+    text = await fetch("https://www.goodfirms.co/sitemap.xml", try_fallbacks=True)
+    if text:
+        sub = re.findall(r"<loc>([^<]*company[^<]*)</loc>", text)
+        for sm_url in sub[:max_pages]:
+            sm_text = await fetch(sm_url, try_fallbacks=True)
+            if not sm_text:
+                continue
+            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
+            filtered = [u for u in urls
+                        if re.match(r"https://www\.goodfirms\.co/company/[a-z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+    # Direct paginated sitemap fallback
+    if not all_urls:
+        for n in range(1, max_pages + 1):
+            sm_text = await fetch(
+                f"https://www.goodfirms.co/sitemap_companies_{n}.xml", try_fallbacks=True
+            )
+            if not sm_text:
+                break
+            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
+            filtered = [u for u in urls
+                        if re.match(r"https://www\.goodfirms\.co/company/[a-z0-9\-]+/?$", u)]
+            all_urls.extend(filtered)
+            if not filtered:
+                break
+    log.info(f"GoodFirms: found {len(all_urls)} URLs")
+    return all_urls[:2000]
+
+
 async def collect_all_urls() -> dict[str, list[str]]:
     """Returns dict of source_name -> list of URLs.
 
@@ -413,6 +515,10 @@ async def collect_all_urls() -> dict[str, list[str]]:
     tasks.append(safe("clutch", clutch_urls()))
     tasks.append(safe("indiehackers", indiehackers_urls()))
     tasks.append(safe("designrush", designrush_urls()))
+    # Zero-Claude founder sources (API/structured data, no interview scraping)
+    tasks.append(safe("hackernews", hackernews_showhn_urls()))
+    tasks.append(safe("betalist", betalist_urls()))
+    tasks.append(safe("goodfirms", goodfirms_urls()))
 
     results = await _asyncio.gather(*tasks)
     out = {name: urls for name, urls in results}
@@ -471,6 +577,9 @@ def source_label(url: str) -> str:
     if "clutch.co" in url: return "Clutch"
     if "indiehackers.com" in url: return "IndieHackers"
     if "designrush.com" in url: return "DesignRush"
+    if "news.ycombinator.com" in url: return "HackerNews"
+    if "betalist.com" in url: return "BetaList"
+    if "goodfirms.co" in url: return "GoodFirms"
     for s in SHOUTOUT_SITES:
         if s in url:
             return s.replace(".com", "").replace("shoutout", "ShoutOut").title()

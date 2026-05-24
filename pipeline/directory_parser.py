@@ -181,6 +181,233 @@ async def parse_indiehackers_profile(url: str) -> dict | None:
     }
 
 
+async def parse_hn_showhn(url: str) -> dict | None:
+    """Parse a Hacker News Show HN story via the Firebase REST API.
+
+    Each Show HN post is a founder showing their product. The story's `url`
+    field IS the founder's website. The `by` field is their HN username; their
+    user profile's `about` often contains an email address.
+    """
+    import httpx as _httpx
+    m = re.search(r"id=(\d+)", url)
+    if not m:
+        return None
+    item_id = m.group(1)
+
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://hacker-news.firebaseio.com/v0/item/{item_id}.json"
+            )
+            if r.status_code != 200:
+                return None
+            story = r.json()
+    except Exception:
+        return None
+
+    if not story or story.get("type") != "story":
+        return None
+
+    # Must have an external URL (the product website)
+    product_url = (story.get("url") or "").strip()
+    if not product_url or not product_url.startswith("http"):
+        return None
+
+    title = (story.get("title") or "").strip()
+    if not title.lower().startswith("show hn"):
+        return None  # not a Show HN — skip
+
+    # Filter out non-product URLs (docs, repos, news articles)
+    JUNK_HOSTS = {
+        "github.com", "gitlab.com", "docs.google.com", "youtube.com",
+        "twitter.com", "x.com", "reddit.com", "linkedin.com", "medium.com",
+        "notion.so", "figma.com", "news.ycombinator.com",
+    }
+    try:
+        prod_domain = product_url.split("/")[2].lower().replace("www.", "")
+    except IndexError:
+        return None
+    if any(j in prod_domain for j in JUNK_HOSTS):
+        return None
+
+    # Clean title: "Show HN: My App – does stuff" → "My App"
+    clean_title = re.sub(r"^Show HN:\s*", "", title, flags=re.IGNORECASE).strip()
+    clean_title = re.split(r"\s+[–—-]{1,2}\s+", clean_title)[0].strip()
+
+    # Fetch author profile for email / real name
+    author = (story.get("by") or "").strip()
+    person_name = None
+    article_emails: list[str] = []
+
+    if author:
+        try:
+            async with _httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"https://hacker-news.firebaseio.com/v0/user/{author}.json"
+                )
+                if r.status_code == 200:
+                    user = r.json() or {}
+                    about = user.get("about") or ""
+                    # Strip HTML tags that HN sometimes wraps around about text
+                    about_clean = re.sub(r"<[^>]+>", " ", about)
+                    # Extract email
+                    em = re.search(
+                        r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b",
+                        about_clean,
+                    )
+                    if em:
+                        article_emails = [em.group(0)]
+                    # Extract real name: "Hi, I'm Jane Smith" / "I am Jane Smith"
+                    nm = re.search(
+                        r"(?:I'm|I am|My name is|name[:\s]+)\s+([A-Z][a-z]+ [A-Z][a-z]+)",
+                        about_clean,
+                    )
+                    if nm:
+                        person_name = nm.group(1)
+        except Exception:
+            pass
+
+    from pipeline.niche import classify
+
+    hook = f"Saw your Show HN post about {clean_title[:55]} — interesting product." if clean_title else ""
+
+    return {
+        "source_url": url,
+        "source": "HackerNews",
+        "name": person_name or author,
+        "website": product_url,
+        "role": "Founder",
+        "company": clean_title,
+        "niche": classify("Founder", clean_title, None, product_url),
+        "hook": hook,
+        "article_emails": article_emails,
+        "_parsed_by": "directory",
+    }
+
+
+async def parse_betalist_startup(url: str) -> dict | None:
+    """Parse a BetaList startup page.
+
+    BetaList pages are server-rendered and include the startup name, tagline,
+    and a direct link to the startup's website. Founder name is sometimes in
+    the page; if not, Skrapp domain-search fills it in later.
+    """
+    html = await fetch(url)
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "lxml")
+    title_el = soup.find("h1")
+    company_name = title_el.get_text(strip=True) if title_el else ""
+    if not company_name:
+        return None
+
+    # BetaList pages have a prominent "Visit Website" or "Launch" CTA button
+    website = None
+    for a in soup.find_all("a", href=True):
+        h = (a.get("href") or "").strip()
+        text = a.get_text(strip=True).lower()
+        if not h.startswith("http"):
+            continue
+        link_domain = h.split("/")[2].lower() if "//" in h else ""
+        if "betalist.com" in link_domain:
+            continue
+        if any(s in link_domain for s in SOCIALS | SELF_HOSTS):
+            continue
+        # Prefer clearly-labelled launch/website buttons
+        if any(kw in text for kw in ("visit", "launch", "website", "try", "get")):
+            website = h.split("?")[0].rstrip("/")
+            break
+    if not website:
+        website = _extract_website(soup, url)
+    if not website:
+        return None
+
+    # Try to find founder name
+    body_text = soup.get_text(" ", strip=True)
+    person_name = None
+    for pat in [
+        r"(?:Founded by|Made by|Created by|By)\s+([A-Z][a-z]+ [A-Z][a-z]+)",
+        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:Founder|CEO|Co-Founder|Owner)",
+    ]:
+        nm = re.search(pat, body_text)
+        if nm:
+            from pipeline.parser import _try_parse_segment
+            candidate = _try_parse_segment(nm.group(1))
+            if candidate:
+                person_name = candidate
+                break
+
+    article_emails = extract_emails(str(soup))
+
+    from pipeline.niche import classify
+
+    return {
+        "source_url": url,
+        "source": "BetaList",
+        "name": person_name or company_name,
+        "website": website,
+        "role": "Founder",
+        "company": company_name,
+        "niche": classify(None, company_name, None, website),
+        "hook": "",
+        "article_emails": sorted(article_emails),
+        "_parsed_by": "directory",
+        "_is_company": person_name is None,
+    }
+
+
+async def parse_goodfirms_profile(url: str) -> dict | None:
+    """Parse a GoodFirms company profile page.
+
+    GoodFirms is an IT/software agency directory similar to Clutch. Each
+    profile includes the company name, website, and sometimes the CEO/founder.
+    """
+    html = await fetch(url)
+    if not html:
+        return None
+
+    soup = BeautifulSoup(html, "lxml")
+    title_el = soup.find("h1")
+    company_name = title_el.get_text(strip=True) if title_el else ""
+    if not company_name:
+        return None
+
+    website = _extract_website(soup, url)
+    if not website:
+        return None
+
+    body_text = soup.get_text(" ", strip=True)
+    person_name = None
+    for pat in [
+        r"(?:CEO|Founder|Co-Founder|Owner|Managing Director|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
+        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|Managing Director)",
+    ]:
+        nm = re.search(pat, body_text)
+        if nm:
+            from pipeline.parser import _try_parse_segment
+            candidate = _try_parse_segment(nm.group(1))
+            if candidate:
+                person_name = candidate
+                break
+
+    from pipeline.niche import classify
+
+    return {
+        "source_url": url,
+        "source": "GoodFirms",
+        "name": person_name or company_name,
+        "website": website,
+        "role": "Founder",
+        "company": company_name,
+        "niche": classify(None, company_name, None, website),
+        "hook": "",
+        "article_emails": [],
+        "_parsed_by": "directory",
+        "_is_company": person_name is None,
+    }
+
+
 async def parse_designrush_profile(url: str) -> dict | None:
     """Parse a DesignRush agency profile."""
     html = await fetch(url)

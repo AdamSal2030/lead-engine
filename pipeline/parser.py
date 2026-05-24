@@ -296,7 +296,6 @@ def find_website(body, body_text: str, page_url: str) -> str | None:
         if not h.startswith("http"):
             continue
         h_clean = h.split("?")[0].split("#")[0].rstrip("/")
-        h_lower = h_clean.lower()
 
         # Skip same-domain links (back-links to interview site)
         link_domain = h_clean.split("/")[2].lower() if h_clean.startswith("http") else ""
@@ -313,9 +312,29 @@ def find_website(body, body_text: str, page_url: str) -> str | None:
             continue
         candidates.append(h_clean)
 
-    # Return first clean candidate
     if candidates:
         return candidates[0]
+
+    # 3. Plain-text https:// URLs in article body (not wrapped in <a> tags).
+    # Many articles mention the founder's site inline: "visit janesmith.com" or
+    # paste a raw https:// link. This catches them without needing Claude.
+    if body_text:
+        _URL_RE = re.compile(
+            r'https?://([a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,})(/[^\s<>"\',;()\[\]{}]*)?'
+        )
+        for m in _URL_RE.finditer(body_text):
+            full = m.group(0).rstrip('.,;)/\'"')
+            domain = m.group(1).lower()
+            if page_domain and page_domain in domain:
+                continue
+            if any(j in domain for j in _WEBSITE_JUNK_SUBSTR):
+                continue
+            if any(s in domain for s in SOCIALS):
+                continue
+            if len(domain) < 5 or "." not in domain:
+                continue
+            return full
+
     return None
 
 
