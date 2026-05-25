@@ -284,8 +284,42 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             except Exception:
                 _domain = ""
 
+            # L3.5: Hunter domain-search — finds REAL emails for a domain without
+            # needing a person name at all. Fires for ALL leads that have a domain.
+            # This is the key fix for directory leads (Trustpilot, Clutch, GoodFirms)
+            # where we have a company domain but no founder name.
+            # Hunter returns confirmed emails from their database — far better than guesses.
+            if _domain:
+                try:
+                    from pipeline.hunter import domain_search as _hunter_ds, get_state as _hunter_state
+                    if _hunter_state().get("enabled"):
+                        _hd_results = await _hunter_ds(_domain)
+                        _found_personal = False
+                        for _hr in _hd_results:
+                            _hr_email = (_hr.get("email") or "").strip()
+                            if not _hr_email:
+                                continue
+                            combined.insert(0, _hr_email)  # prepend — real address, high confidence
+                            if not _found_personal and _hr.get("type") == "personal":
+                                _found_personal = True
+                                # Upgrade company-only lead → person when Hunter knows who it is
+                                if parsed.get("_is_company"):
+                                    _fn = (_hr.get("first_name") or "").strip()
+                                    _ln = (_hr.get("last_name") or "").strip()
+                                    if _fn and _ln:
+                                        parsed["name"] = f"{_fn} {_ln}"
+                                        parsed["_is_company"] = False
+                                        _words = parsed["name"].split()
+                                        _first = _words[0] if _words else ""
+                                        _last = _words[-1] if len(_words) > 1 else ""
+                        if _found_personal:
+                            need_skrapp = False  # Hunter already found a real personal email
+                except Exception:
+                    pass
+
             # For directory sources with only a company name (no personal name),
-            # generate decision-maker pattern emails as L3.5 before hitting Skrapp.
+            # generate decision-maker pattern emails as L3.6 — only if Hunter
+            # didn't find anything real for this domain.
             if parsed.get("_is_company") and _domain and need_skrapp:
                 for dm_local in ["founder", "ceo", "owner", "hello", "contact", "info"]:
                     combined.append(f"{dm_local}@{_domain}")

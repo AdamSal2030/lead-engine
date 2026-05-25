@@ -404,6 +404,57 @@ async def retry_no_parse():
     return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} no_parse URLs. Claude will retry them in the next batch."}
 
 
+@app.get("/admin/reset-seen")
+@app.post("/admin/reset-seen")
+async def admin_reset_seen(
+    no_parse: bool = True,
+    claude_no_parse: bool = True,
+    no_emails: bool = True,
+):
+    """Nuclear pool reset — clears SeenURL rows so the engine treats them as fresh.
+
+    Useful when:
+     - URL pool is exhausted and you want a full restart
+     - You've added new sources and want them processed ASAP
+     - The engine has been running a long time and seen everything
+
+    Does NOT delete verified leads or raw leads — only the dedup filter.
+
+    Query params (all default True):
+      no_parse=true          — regex-failed articles (Claude will retry)
+      claude_no_parse=true   — Claude-failed articles (expensive to retry)
+      no_emails=true         — parsed OK but no emails found
+    Error rows are always cleared.
+    """
+    from sqlalchemy import delete as sql_delete
+    from db import SeenURL
+    cleared: dict[str, int] = {}
+    async with SessionLocal() as s:
+        if no_parse:
+            r = await s.execute(sql_delete(SeenURL).where(SeenURL.status == "no_parse"))
+            cleared["no_parse"] = r.rowcount
+        if claude_no_parse:
+            r = await s.execute(sql_delete(SeenURL).where(SeenURL.status == "claude_no_parse"))
+            cleared["claude_no_parse"] = r.rowcount
+        if no_emails:
+            r = await s.execute(sql_delete(SeenURL).where(SeenURL.status == "no_emails"))
+            cleared["no_emails"] = r.rowcount
+        r = await s.execute(sql_delete(SeenURL).where(SeenURL.status == "error"))
+        cleared["error"] = r.rowcount
+        await s.commit()
+    total = sum(cleared.values())
+    log.info(f"admin reset-seen: cleared {total} rows — {cleared}")
+    return {
+        "ok": True,
+        "cleared": cleared,
+        "total": total,
+        "msg": (
+            f"Cleared {total} SeenURL rows. The engine will reprocess all of these "
+            "on the next batch. Verified leads are untouched."
+        ),
+    }
+
+
 @app.get("/health")
 async def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat()}
@@ -425,6 +476,11 @@ async def debug_quick():
         out["skrapp"] = skrapp_state()
     except Exception as e:
         out["skrapp"] = {"error": str(e)[:200]}
+    try:
+        from pipeline.hunter import get_state as hunter_state
+        out["hunter"] = hunter_state()
+    except Exception as e:
+        out["hunter"] = {"error": str(e)[:200]}
     try:
         from pipeline.reoon_pool import get_pool as _rpool
         p = _rpool()
@@ -518,6 +574,13 @@ async def debug():
         diag["mv"] = mv_state()
     except Exception as e:
         diag["mv"] = {"error": str(e)[:200]}
+
+    # 4c-ii. Hunter state
+    try:
+        from pipeline.hunter import get_state as hunter_state
+        diag["hunter"] = hunter_state()
+    except Exception as e:
+        diag["hunter"] = {"error": str(e)[:200]}
 
     # 4c. Reoon pool state
     try:
