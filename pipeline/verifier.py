@@ -100,7 +100,7 @@ def _is_personal_email(email: str, name: str) -> bool:
     local = email.split("@")[0].lower()
     # Broad generic set — any email with these local parts is a role address, not personal
     generic = {
-        "info", "hello", "contact", "support", "team", "admin", "office",
+        "info", "hello", "hi", "contact", "contactus", "support", "team", "admin", "office",
         "sales", "help", "press", "media", "hr", "jobs", "careers",
         "noreply", "no-reply", "donotreply", "mail", "enquiries", "enquiry",
         "webmaster", "postmaster", "hostmaster", "abuse", "newsletter",
@@ -108,8 +108,20 @@ def _is_personal_email(email: str, name: str) -> bool:
         "partnership", "partnerships", "affiliate", "affiliates", "service",
         "services", "general", "reception", "booking", "reservations",
         "customerservice", "customer", "feedback", "inquiry", "inquiries",
+        "business", "guestservices", "onlinesupport", "information",
+        "servicedesk", "helpdesk", "clientsolutions", "engage", "gradadm",
+        "technical", "techsupport", "technicalsupport", "admissions",
+        "coaching", "coach", "studio", "management", "operations",
     }
-    if local in generic:
+    # Compound generic check — catches "support.ca" → "supportca", "technical-support", etc.
+    local_stripped = re.sub(r"[._\-+]", "", local)
+    if local in generic or local_stripped in generic:
+        return False
+
+    _GENERIC_PREFIXES = ("info", "support", "service", "contact", "sales",
+                         "noreply", "donotreply", "billing", "marketing", "booking",
+                         "helpdesk", "servicedesk", "customerservice", "technical")
+    if any(local_stripped.startswith(pfx) for pfx in _GENERIC_PREFIXES):
         return False
 
     # Check if name tokens appear in local part (strongest signal)
@@ -181,6 +193,12 @@ async def verify_lead(lead: dict) -> dict | None:
     founder_name = lead.get("name", "")
 
     for email in sorted_c:
+        # Hard gate: never select generic role addresses (info@, support@, contact@, etc.)
+        # as the outreach email regardless of verification result — they go to support
+        # desks, not founders, and trigger spam complaints.
+        if not _is_acceptable_email(email, founder_name):
+            continue
+
         # PRIMARY: MillionVerifier (fast, cheap)
         mv_res = await mv.verify(email)
         if mv_res:
