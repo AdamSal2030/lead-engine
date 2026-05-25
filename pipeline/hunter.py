@@ -82,7 +82,7 @@ async def domain_search(domain: str, limit: int = 10) -> list[dict]:
         for e in emails_raw:
             email = (e.get("value") or "").strip().lower()
             confidence = int(e.get("confidence") or 0)
-            if email and confidence >= 40:
+            if email and confidence >= 25:
                 results.append({
                     "email": email,
                     "confidence": confidence,
@@ -149,7 +149,7 @@ async def find_email(first_name: str, last_name: str, domain: str) -> dict | Non
         email = data.get("email")
         confidence = int(data.get("confidence") or 0)
 
-        if not email or confidence < 50:
+        if not email or confidence < 30:
             return None
 
         async with _lock:

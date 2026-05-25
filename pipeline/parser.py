@@ -573,13 +573,16 @@ async def parse_article(url: str) -> dict | None:
         if not _is_interview_worthy(title_text, body_text, url):
             return None  # not an interview — mark no_parse (cheap, no Claude)
 
-        from pipeline.claude_parser import parse_with_claude, _get_client
-        # If Claude is not configured (no API key), don't permanently mark as failed
-        if not _get_client():
-            return None  # mark no_parse — can retry when API key is added
+        from pipeline.claude_parser import parse_with_claude, _get_client, CAP_REACHED
 
         clean_text = _extract_text_for_claude(soup, title_text, body, url)
         claude_result = await parse_with_claude(url, clean_text)
+
+        # Cap reached or no API key — Claude never fired. Keep URL as no_parse
+        # so it gets retried next batch (NOT claude_no_parse which is permanent).
+        if claude_result is CAP_REACHED:
+            return None
+
         if claude_result:
             article_emails = extract_emails(str(body)) if body else set()
             from pipeline.niche import classify
@@ -599,8 +602,8 @@ async def parse_article(url: str) -> dict | None:
                 "article_emails": sorted(article_emails),
                 "_parsed_by": "claude",
             }
-        # Claude was configured, tried, and failed — mark as claude_no_parse
-        # so this URL is never retried (saves future Haiku calls)
+        # Claude was configured, actually tried, and genuinely failed — mark
+        # as claude_no_parse so we don't waste Haiku credits retrying it.
         return {"_failed": "claude"}
 
     # name + website found via regex — body is optional (used only for email extraction)
@@ -709,9 +712,12 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
                         all_emails.add(f"{last}.{first}@{domain}")    # smith.jane@
                         all_emails.add(f"{first}_{last}@{domain}")    # jane_smith@
                         all_emails.add(f"{first}.{l1}@{domain}")      # jane.s@
+                        all_emails.add(f"{last}{f1}@{domain}")        # smithj@
+                        all_emails.add(f"{first}-{last}@{domain}")    # jane-smith@
                         # Generic fallbacks (lower rank — tried only if personal fail)
                         all_emails.add(f"hello@{domain}")
                         all_emails.add(f"info@{domain}")
+                        all_emails.add(f"hi@{domain}")
 
     all_emails = {e for e in all_emails if e.split("@")[0] not in JUNK_LOCALS}
     return sorted(all_emails)
@@ -742,7 +748,7 @@ def rank_emails(emails: list[str], founder_name: str) -> list[str]:
         is_free = dom in FREE_PROVIDERS
         local_l = local.lower()
         name_match = (first and first in local_l) or (last and last in local_l)
-        is_generic = local_l in {"info","hello","contact","support","team","admin","office",
+        is_generic = local_l in {"info","hello","hi","contact","support","team","admin","office",
                                  "sales","help","press","media","hr","jobs","careers"}
         # Lower is better (sorted ascending)
         if is_free and name_match: return 0

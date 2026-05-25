@@ -77,16 +77,24 @@ Rules: website must be a real domain starting with http (normalise bare domains 
 """
 
 
-async def parse_with_claude(url: str, clean_text: str) -> dict | None:
+CAP_REACHED = "cap_reached"  # sentinel — cap hit, Claude never tried, URL is retriable
+
+
+async def parse_with_claude(url: str, clean_text: str):
     """Parse article with Claude Haiku. Accepts clean extracted text (NOT raw HTML).
-    Returns structured dict or None. Respects daily call cap."""
+
+    Returns:
+      dict  — success (name + website found)
+      None  — Claude tried but found nothing (article isn't an interview) → claude_no_parse
+      CAP_REACHED sentinel — daily cap hit, Claude never fired → mark as no_parse (retriable)
+    """
     client = _get_client()
     if not client:
-        return None
+        return CAP_REACHED  # no API key configured — keep URL retriable
 
     if not _within_daily_limit():
         log.info(f"Claude daily cap ({settings.CLAUDE_MAX_PER_DAY}) reached — skipping {url}")
-        return None
+        return CAP_REACHED  # cap hit — URL should stay as no_parse, NOT claude_no_parse
 
     try:
         _increment_call()

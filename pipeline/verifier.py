@@ -145,7 +145,9 @@ def _is_personal_email(email: str, name: str) -> bool:
 
 
 _ROLE_LOCALS = {"founder", "ceo", "owner", "cto", "coo", "president",
-                "director", "md", "gm", "partner", "principal"}
+                "director", "md", "gm", "partner", "principal",
+                "chief", "cofounder", "co-founder", "operator",
+                "head", "managing", "exec"}
 
 
 def _is_acceptable_email(email: str, name: str) -> bool:
@@ -240,8 +242,8 @@ async def verify_lead(lead: dict) -> dict | None:
                     },
                 }
 
-        # Reoon "risky" — still accept if it's a personal/role email on a catch-all
-        # domain. "risky" from Reoon usually just means catch-all, not truly bad.
+        # Reoon "risky" — accept on catch-all domains if email looks personal/role.
+        # "risky" from Reoon usually just means catch-all, not truly bad.
         if status == "risky" and is_catch and _is_acceptable_email(email, founder_name):
             return {
                 **lead,
@@ -249,6 +251,32 @@ async def verify_lead(lead: dict) -> dict | None:
                 "verification": {
                     "status": "risky_catch_all", "verifier": "reoon",
                     "score": score, "is_catch_all": True, "tier": "A",
+                },
+            }
+
+        # Reoon "risky" on non-catch-all — accept if the email clearly contains
+        # the founder's name. Small-biz domains often have misconfigured SPF/MX
+        # which makes Reoon rate them risky even when the mailbox is real.
+        if status == "risky" and not is_catch and _is_personal_email(email, founder_name):
+            return {
+                **lead,
+                "verified_email": email,
+                "verification": {
+                    "status": "risky_personal", "verifier": "reoon",
+                    "score": max(score, 55), "is_catch_all": False, "tier": "A",
+                },
+            }
+
+        # Reoon "unknown" — SMTP server didn't respond / inconclusive. Accept if
+        # the email looks like a real personal address (name-based local part).
+        # These are worth the occasional bounce — missing them costs more leads.
+        if status == "unknown" and _is_personal_email(email, founder_name):
+            return {
+                **lead,
+                "verified_email": email,
+                "verification": {
+                    "status": "unknown_personal", "verifier": "reoon",
+                    "score": 50, "is_catch_all": is_catch, "tier": "A",
                 },
             }
 

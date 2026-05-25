@@ -2,13 +2,13 @@ from __future__ import annotations
 """MillionVerifier wrapper.
 Primary verifier — 1000 RPM, ~$0.0014/email, SMTP-level verification.
 
-Result mapping:
+Result mapping (final decision is made in verifier.py, not here):
   result="ok"         → Tier-A safe ✓
-  result="catch_all"  → reject (catch-alls bounce in our setup)
-  result="disposable" → reject
-  result="invalid"    → reject
-  result="unknown"    → reject (don't risk it)
-  result="error"      → return None (caller may fall back to Reoon)
+  result="catch_all"  → accepted by verifier.py if email is personal/role-based
+  result="disposable" → rejected by verifier.py
+  result="invalid"    → rejected by verifier.py
+  result="unknown"    → falls through to Reoon for second opinion
+  result="error"      → return None (caller falls back to Reoon)
 """
 import asyncio
 import logging

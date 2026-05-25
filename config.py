@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # Claude API — powers smart article parsing + niche/hook extraction
     ANTHROPIC_API_KEY: str = ""
     CLAUDE_PARSE_ENABLED: bool = True   # use Claude as fallback when regex parser fails
-    CLAUDE_MAX_PER_DAY: int = 500       # daily cap on Haiku calls — shorter prompt+max_tokens keeps cost low
+    CLAUDE_MAX_PER_DAY: int = 1000      # daily cap on Haiku calls (~$0.06/day at 1000 calls)
 
     # Hunter.io — Layer 5 email finder (after Skrapp)
     HUNTER_API_KEY: str = ""

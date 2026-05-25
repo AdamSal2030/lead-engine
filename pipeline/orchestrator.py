@@ -97,6 +97,29 @@ async def clear_no_parse_seen() -> int:
         return result.rowcount
 
 
+async def clear_old_no_parse(days: int = 14) -> int:
+    """Clear plain no_parse entries older than `days` days.
+
+    These are URLs where the regex parser failed but Claude was never tried
+    (either disabled or daily cap hit). Retry them periodically because:
+      - Article content gets updated over time
+      - The regex parser improves across deploys
+    Unlike claude_no_parse (Claude already tried), these are cheap to retry.
+    """
+    from sqlalchemy import delete
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    async with SessionLocal() as s:
+        result = await s.execute(
+            delete(SeenURL).where(
+                SeenURL.status == "no_parse",
+                SeenURL.first_seen < cutoff,
+            )
+        )
+        await s.commit()
+        return result.rowcount
+
+
 async def clear_old_claude_no_parse(days: int = 7) -> int:
     """Clear claude_no_parse entries older than `days` days.
 
@@ -381,8 +404,15 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             # generate decision-maker pattern emails as L3.6 — only if Hunter
             # didn't find anything real for this domain.
             if parsed.get("_is_company") and _domain and need_skrapp:
-                for dm_local in ["founder", "ceo", "owner", "hello", "contact", "info"]:
+                for dm_local in ["founder", "ceo", "owner", "hello", "contact",
+                                 "info", "team", "admin", "hi"]:
                     combined.append(f"{dm_local}@{_domain}")
+                # Also try a slug derived from the company name itself.
+                # E.g. "Acme Digital" → "acme@acmedigital.com" — often real for solo founders.
+                _company_raw = (parsed.get("company") or parsed.get("name") or "").lower()
+                _company_slug = re.sub(r"[^a-z0-9]", "", _company_raw.split()[0]) if _company_raw.split() else ""
+                if _company_slug and len(_company_slug) >= 3 and _company_slug not in {"the", "our", "inc", "llc", "ltd"}:
+                    combined.append(f"{_company_slug}@{_domain}")
 
             # L4: Skrapp finder
             if need_skrapp and skrapp_finder.get_state().get("enabled"):
@@ -458,6 +488,13 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
             # all 6 hours while genuinely parseable sources get starved.
             retry_cleared = await clear_stuck_seen(include_no_parse=False)
             log.info(f"  Cleared {retry_cleared} no_emails/error URLs for retry")
+            # Time-based refresh: no_parse URLs older than 14 days get another shot
+            # — article content changes and the regex parser improves over time.
+            # (claude_no_parse takes 7 days; plain no_parse is cheaper to retry)
+            np_stale = await clear_old_no_parse(days=14)
+            if np_stale:
+                log.info(f"  Cleared {np_stale} stale no_parse URLs (>14 days) for retry")
+
             # Time-based refresh: claude_no_parse URLs older than 7 days get another
             # shot — our parser has improved and the page content may have changed.
             cnp_cleared = await clear_old_claude_no_parse(days=7)

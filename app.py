@@ -386,10 +386,17 @@ async def unibox_insights():
 @app.get("/retry-stuck")
 @app.post("/retry-stuck")
 async def retry_stuck():
-    """Clear no_emails + error URLs so they get retried on the next batch."""
-    from pipeline.orchestrator import clear_stuck_seen
+    """Clear no_emails + error URLs, and stale no_parse (>14 days), for next-batch retry."""
+    from pipeline.orchestrator import clear_stuck_seen, clear_old_no_parse
     cleared = await clear_stuck_seen(include_no_parse=False)
-    return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} stuck URLs (no_emails + error). They'll be reprocessed next batch."}
+    np_stale = await clear_old_no_parse(days=0)  # force-clear ALL no_parse when called manually
+    total = cleared + np_stale
+    return {
+        "ok": True,
+        "cleared": total,
+        "breakdown": {"no_emails_error": cleared, "no_parse": np_stale},
+        "msg": f"Cleared {total} URLs (no_emails/error: {cleared}, no_parse: {np_stale}). They'll be reprocessed next batch.",
+    }
 
 
 @app.get("/retry-no-parse")
