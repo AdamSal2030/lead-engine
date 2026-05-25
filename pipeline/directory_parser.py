@@ -408,78 +408,85 @@ async def parse_goodfirms_profile(url: str) -> dict | None:
     }
 
 
-async def parse_g2_product(url: str) -> dict | None:
-    """Parse a G2 software product page.
+async def parse_trustpilot_business(url: str) -> dict | None:
+    """Parse a Trustpilot business review page.
 
-    G2 product pages list the company name, category, and have a 'Visit Website'
-    button with the company's real website URL. No Claude needed.
+    KEY TRICK: the company domain is in the URL itself, so we NEVER need to
+    scrape the page just to find the website — we already have it.
+      https://www.trustpilot.com/review/acme.com  →  website = https://acme.com
+
+    We still fetch the page to get the company name (for email personalisation),
+    but if the fetch fails we can still produce a lead using just the domain and
+    decision-maker pattern emails (founder@, ceo@, hello@, info@).
     """
-    html = await fetch(url)
-    if not html:
+    # Extract domain directly from URL — this is always available
+    m = re.match(
+        r"https://www\.trustpilot\.com/review/([a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,})/?$",
+        url,
+    )
+    if not m:
+        return None
+    domain = m.group(1).lower()
+    website = f"https://{domain}"
+
+    # Skip obvious non-business TLDs and known junk
+    BAD_TLDS = {".gov", ".edu", ".mil"}
+    if any(domain.endswith(t) for t in BAD_TLDS):
         return None
 
-    soup = BeautifulSoup(html, "lxml")
-    title_el = soup.find("h1")
-    company_name = title_el.get_text(strip=True) if title_el else ""
-    if not company_name:
-        return None
-
-    # G2 has a prominent "Visit Website" / "Visit x.com" link
-    website = None
-    for a in soup.find_all("a", href=True):
-        h = (a.get("href") or "").strip()
-        text = a.get_text(strip=True).lower()
-        if not h.startswith("http"):
-            continue
-        link_domain = h.split("/")[2].lower() if "//" in h else ""
-        if "g2.com" in link_domain:
-            continue
-        if any(s in link_domain for s in SOCIALS | SELF_HOSTS):
-            continue
-        if any(kw in text for kw in ("visit website", "visit", "get started", "free trial", "try free")):
-            website = h.split("?")[0].rstrip("/")
-            break
-    if not website:
-        website = _extract_website(soup, url)
-    if not website:
-        return None
-
-    body_text = soup.get_text(" ", strip=True)
+    # Fetch for company name (best-effort; we succeed even without it)
+    company_name = domain.split(".")[0].replace("-", " ").title()  # fallback
     person_name = None
-    for pat in [
-        r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|President)",
-    ]:
-        nm = re.search(pat, body_text)
-        if nm:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(nm.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    article_emails: list[str] = []
+
+    html = await fetch(url, timeout=12)
+    if html:
+        soup = BeautifulSoup(html, "lxml")
+        h1 = soup.find("h1")
+        if h1:
+            raw = h1.get_text(strip=True)
+            # Trustpilot H1 pattern: "Reviews of Acme Inc" or just "Acme Inc"
+            clean = re.sub(r"^Reviews?\s+(?:of|for)\s+", "", raw, flags=re.IGNORECASE).strip()
+            if clean and len(clean) < 100:
+                company_name = clean
+        body_text = soup.get_text(" ", strip=True)
+        # Try to find a person name (CEO/founder sometimes mentioned in reviews)
+        for pat in [
+            r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
+            r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner)",
+        ]:
+            nm = re.search(pat, body_text)
+            if nm:
+                from pipeline.parser import _try_parse_segment
+                candidate = _try_parse_segment(nm.group(1))
+                if candidate:
+                    person_name = candidate
+                    break
+        article_emails = list(extract_emails(str(soup)))
 
     from pipeline.niche import classify
 
     return {
         "source_url": url,
-        "source": "G2",
+        "source": "Trustpilot",
         "name": person_name or company_name,
         "website": website,
         "role": "Founder",
         "company": company_name,
         "niche": classify(None, company_name, None, website),
         "hook": "",
-        "article_emails": [],
+        "article_emails": article_emails,
         "_parsed_by": "directory",
         "_is_company": person_name is None,
     }
 
 
-async def parse_capterra_product(url: str) -> dict | None:
-    """Parse a Capterra software product page.
+async def parse_appsumo_product(url: str) -> dict | None:
+    """Parse an AppSumo product listing.
 
-    Similar to G2 — each product page has a company name, category, and a
-    direct link to the company website.
+    AppSumo is a marketplace for SaaS lifetime deals. Each product page is
+    server-side rendered and includes the product name, tagline, and a link to
+    the company website. Reaches bootstrapped founders before they're published.
     """
     html = await fetch(url)
     if not html:
@@ -487,23 +494,25 @@ async def parse_capterra_product(url: str) -> dict | None:
 
     soup = BeautifulSoup(html, "lxml")
     title_el = soup.find("h1")
-    company_name = title_el.get_text(strip=True) if title_el else ""
-    if not company_name:
+    product_name = title_el.get_text(strip=True) if title_el else ""
+    if not product_name:
         return None
 
-    # Capterra has "Visit Website" CTA
+    # Website: look for CTA buttons and external links
     website = None
+    APPSUMO_JUNK = {"appsumo.com", "partners.appsumo.com", "help.appsumo.com"}
     for a in soup.find_all("a", href=True):
         h = (a.get("href") or "").strip()
         text = a.get_text(strip=True).lower()
         if not h.startswith("http"):
             continue
-        link_domain = h.split("/")[2].lower() if "//" in h else ""
-        if "capterra.com" in link_domain or "gartner.com" in link_domain:
+        link_domain = h.split("/")[2].lower().replace("www.", "") if "//" in h else ""
+        if any(j in link_domain for j in APPSUMO_JUNK):
             continue
         if any(s in link_domain for s in SOCIALS | SELF_HOSTS):
             continue
-        if any(kw in text for kw in ("visit website", "visit", "get started", "free trial", "try")):
+        # Prefer CTA buttons
+        if any(kw in text for kw in ("get", "visit", "try", "start", "access", "lifetime")):
             website = h.split("?")[0].rstrip("/")
             break
     if not website:
@@ -514,8 +523,8 @@ async def parse_capterra_product(url: str) -> dict | None:
     body_text = soup.get_text(" ", strip=True)
     person_name = None
     for pat in [
-        r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|President)",
+        r"(?:Founder|CEO|Creator|Made by|Created by)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
+        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:Founder|CEO|Creator)",
     ]:
         nm = re.search(pat, body_text)
         if nm:
@@ -525,18 +534,19 @@ async def parse_capterra_product(url: str) -> dict | None:
                 person_name = candidate
                 break
 
+    article_emails = list(extract_emails(str(soup)))
     from pipeline.niche import classify
 
     return {
         "source_url": url,
-        "source": "Capterra",
-        "name": person_name or company_name,
+        "source": "AppSumo",
+        "name": person_name or product_name,
         "website": website,
         "role": "Founder",
-        "company": company_name,
-        "niche": classify(None, company_name, None, website),
+        "company": product_name,
+        "niche": classify(None, product_name, None, website),
         "hook": "",
-        "article_emails": [],
+        "article_emails": article_emails,
         "_parsed_by": "directory",
         "_is_company": person_name is None,
     }

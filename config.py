@@ -48,10 +48,10 @@ class Settings(BaseSettings):
 
     # Backwards-compat
     DEFAULT_TARGET: int = 2000
-    MAX_VERIFY_CONCURRENCY: int = 50     # MV handles 1000 RPM → 50 concurrent fine
-    SCRAPE_CONCURRENCY: int = 25         # Railway 512MB+ can handle 25 concurrent scrapes
-    EMAIL_FIND_CONCURRENCY: int = 8      # parallel page fetches per founder website
-    SKRAPP_CONCURRENCY: int = 8          # parallel Skrapp calls
+    MAX_VERIFY_CONCURRENCY: int = 40     # MV handles 1000 RPM → 40 concurrent fine
+    SCRAPE_CONCURRENCY: int = 15         # conservative — Railway 512MB headroom
+    EMAIL_FIND_CONCURRENCY: int = 6      # parallel page fetches per founder website
+    SKRAPP_CONCURRENCY: int = 6          # parallel Skrapp calls
 
     # Reoon
     REOON_BASE_URL: str = "https://emailverifier.reoon.com"

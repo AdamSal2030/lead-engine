@@ -97,6 +97,27 @@ async def clear_no_parse_seen() -> int:
         return result.rowcount
 
 
+async def clear_old_claude_no_parse(days: int = 7) -> int:
+    """Clear claude_no_parse entries older than `days` days.
+
+    Our parser improves over time and page content changes — URLs that Claude
+    couldn't extract from a week ago deserve a fresh attempt. The daily Claude
+    cap (CLAUDE_MAX_PER_DAY) prevents runaway spend on re-tries.
+    """
+    from sqlalchemy import delete
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    async with SessionLocal() as s:
+        result = await s.execute(
+            delete(SeenURL).where(
+                SeenURL.status == "claude_no_parse",
+                SeenURL.first_seen < cutoff,
+            )
+        )
+        await s.commit()
+        return result.rowcount
+
+
 async def mark_seen(url: str, source: str, status: str):
     async with SessionLocal() as s:
         s.add(SeenURL(url=url, source=source, status=status))
@@ -201,12 +222,12 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
             elif source == "goodfirms":
                 from pipeline.directory_parser import parse_goodfirms_profile
                 parsed = await parse_goodfirms_profile(url)
-            elif source == "g2":
-                from pipeline.directory_parser import parse_g2_product
-                parsed = await parse_g2_product(url)
-            elif source == "capterra":
-                from pipeline.directory_parser import parse_capterra_product
-                parsed = await parse_capterra_product(url)
+            elif source == "trustpilot":
+                from pipeline.directory_parser import parse_trustpilot_business
+                parsed = await parse_trustpilot_business(url)
+            elif source == "appsumo":
+                from pipeline.directory_parser import parse_appsumo_product
+                parsed = await parse_appsumo_product(url)
             else:
                 parsed = await parse_article(url)
 
@@ -336,14 +357,18 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
 
         try:
             # ── Re-open the retry pool on every batch start ────────────────────
-            # URLs marked no_parse / no_emails / error are not permanently bad:
-            #   no_parse  → improved regex/Claude may succeed now
-            #   no_emails → website may have added an email, or better patterns find one
-            #   error     → transient scrape failure
-            # Clearing them before each batch gives us a full retry queue instead
-            # of running dry after just the handful of brand-new sitemap entries.
-            retry_cleared = await clear_stuck_seen(include_no_parse=True)
-            log.info(f"  Cleared {retry_cleared} no_parse/no_emails/error URLs for retry")
+            # Clear no_emails + error every batch (transient — worth retrying).
+            # Do NOT clear no_parse here: those are structural parse failures; with
+            # our improved patterns they will be cleared weekly by the app-level job.
+            # Clearing no_parse every batch floods the queue with junk URLs that eat
+            # all 6 hours while genuinely parseable sources get starved.
+            retry_cleared = await clear_stuck_seen(include_no_parse=False)
+            log.info(f"  Cleared {retry_cleared} no_emails/error URLs for retry")
+            # Time-based refresh: claude_no_parse URLs older than 7 days get another
+            # shot — our parser has improved and the page content may have changed.
+            cnp_cleared = await clear_old_claude_no_parse(days=7)
+            if cnp_cleared:
+                log.info(f"  Cleared {cnp_cleared} claude_no_parse URLs older than 7 days")
 
             # Verify concurrency scales with # of Reoon keys
             from pipeline.reoon_pool import get_pool as _pool

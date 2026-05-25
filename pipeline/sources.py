@@ -430,78 +430,85 @@ async def betalist_urls(max_pages: int = 20) -> list[str]:
     return all_urls[:500]
 
 
-async def g2_urls(max_pages: int = 30) -> list[str]:
-    """G2 software review directory — tens of thousands of SaaS/software company pages.
+async def trustpilot_urls(max_sitemaps: int = 10) -> list[str]:
+    """Trustpilot business review pages — millions of small businesses worldwide.
 
-    Each G2 product page has the company's website URL in a "Visit Website" CTA.
-    parse_g2_product() in directory_parser extracts company name + website.
-    No Claude needed.
+    KEY TRICK: the company domain is embedded directly in the URL:
+      https://www.trustpilot.com/review/acme.com  →  domain = acme.com
+    This means the parser can skip website extraction entirely and use the
+    domain from the URL to generate email patterns immediately. No Claude needed.
     """
-    all_urls = []
-    # G2 product sitemaps: sitemap_products_N.xml
-    for n in range(1, max_pages + 1):
-        text = await fetch(f"https://www.g2.com/sitemap_products_{n}.xml", try_fallbacks=True)
+    all_urls: list[str] = []
+    # Trustpilot publishes paginated business-entity sitemaps
+    sitemap_index = await fetch("https://www.trustpilot.com/sitemap.xml", try_fallbacks=True)
+    sub_sitemaps: list[str] = []
+    if sitemap_index:
+        sub_sitemaps = re.findall(
+            r"<loc>(https://www\.trustpilot\.com/sitemap[^<]*business[^<]*)</loc>",
+            sitemap_index,
+        )
+    if not sub_sitemaps:
+        # Known pattern as fallback
+        sub_sitemaps = [
+            f"https://www.trustpilot.com/sitemap_business-entity_{n}.xml"
+            for n in range(1, max_sitemaps + 1)
+        ]
+    for sm in sub_sitemaps[:max_sitemaps]:
+        text = await fetch(sm, try_fallbacks=True)
         if not text:
-            # Try generic sitemap index first
-            if n == 1:
-                idx = await fetch("https://www.g2.com/sitemap.xml", try_fallbacks=True)
-                if idx:
-                    sub = re.findall(r"<loc>([^<]*product[^<]*)</loc>", idx)
-                    for sm in sub[:max_pages]:
-                        sm_text = await fetch(sm, try_fallbacks=True)
-                        if sm_text:
-                            urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
-                            filtered = [u for u in urls
-                                        if re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+/reviews/?$", u)
-                                        or re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+/?$", u)]
-                            all_urls.extend(filtered)
-            break
+            continue
         urls = re.findall(r"<loc>([^<]+)</loc>", text)
-        filtered = [u for u in urls
-                    if re.match(r"https://www\.g2\.com/products/[a-z0-9\-]+(?:/reviews)?/?$", u)]
-        all_urls.extend(filtered)
-        if not filtered:
-            break
+        for u in urls:
+            # Only keep review pages (domain is in the path)
+            m = re.match(
+                r"https://www\.trustpilot\.com/review/([a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,})/?$",
+                u,
+            )
+            if m:
+                all_urls.append(u)
     all_urls = list(dict.fromkeys(all_urls))
-    log.info(f"G2: found {len(all_urls)} product URLs")
-    return all_urls[:5000]
+    log.info(f"Trustpilot: found {len(all_urls)} business URLs")
+    return all_urls[:8000]
 
 
-async def capterra_urls(max_pages: int = 20) -> list[str]:
-    """Capterra software directory — similar to G2, tens of thousands of products.
+async def appsumo_urls(max_pages: int = 20) -> list[str]:
+    """AppSumo product listing pages — indie SaaS founders selling lifetime deals.
 
-    Each product page has a company website link. No Claude needed.
+    AppSumo pages are server-side rendered and each product has a direct link
+    to the company/product website. Great for reaching bootstrapped founders
+    who haven't been featured in traditional interview sites.
     """
-    all_urls = []
-    text = await fetch("https://www.capterra.com/sitemap.xml", try_fallbacks=True)
+    all_urls: list[str] = []
+    # Try sitemap first
+    text = await fetch("https://appsumo.com/sitemap.xml", try_fallbacks=True)
     if text:
         sub = re.findall(r"<loc>([^<]+)</loc>", text)
-        product_sitemaps = [u for u in sub if "product" in u.lower() or "software" in u.lower()]
+        product_sitemaps = [u for u in sub if "product" in u.lower()]
         for sm in product_sitemaps[:max_pages]:
             sm_text = await fetch(sm, try_fallbacks=True)
             if not sm_text:
                 continue
             urls = re.findall(r"<loc>([^<]+)</loc>", sm_text)
-            filtered = [u for u in urls
-                        if re.match(r"https://www\.capterra\.com/p/\d+/[a-zA-Z0-9\-]+/?$", u)]
+            filtered = [
+                u for u in urls
+                if re.match(r"https://appsumo\.com/products/[a-z0-9\-]+/?$", u)
+            ]
             all_urls.extend(filtered)
-    # Direct paginated fallback
+    # Fallback: paginated browse
     if not all_urls:
-        for n in range(1, max_pages + 1):
-            text = await fetch(
-                f"https://www.capterra.com/sitemap_products_{n}.xml", try_fallbacks=True
-            )
+        for page in range(1, max_pages + 1):
+            suffix = f"?page={page}" if page > 1 else ""
+            text = await fetch(f"https://appsumo.com/browse/{suffix}", try_fallbacks=True)
             if not text:
                 break
-            urls = re.findall(r"<loc>([^<]+)</loc>", text)
-            filtered = [u for u in urls
-                        if re.match(r"https://www\.capterra\.com/p/\d+/[a-zA-Z0-9\-]+/?$", u)]
-            all_urls.extend(filtered)
-            if not filtered:
+            found = re.findall(r'href="(/products/[a-z0-9\-]+)"', text)
+            page_urls = list({f"https://appsumo.com{slug}" for slug in found})
+            all_urls.extend(page_urls)
+            if not found:
                 break
     all_urls = list(dict.fromkeys(all_urls))
-    log.info(f"Capterra: found {len(all_urls)} product URLs")
-    return all_urls[:5000]
+    log.info(f"AppSumo: found {len(all_urls)} product URLs")
+    return all_urls[:3000]
 
 
 async def goodfirms_urls(max_pages: int = 15) -> list[str]:
@@ -593,8 +600,8 @@ async def collect_all_urls() -> dict[str, list[str]]:
     tasks.append(safe("hackernews", hackernews_showhn_urls()))
     tasks.append(safe("betalist", betalist_urls()))
     tasks.append(safe("goodfirms", goodfirms_urls()))
-    tasks.append(safe("g2", g2_urls()))
-    tasks.append(safe("capterra", capterra_urls()))
+    tasks.append(safe("trustpilot", trustpilot_urls()))
+    tasks.append(safe("appsumo", appsumo_urls()))
 
     results = await _asyncio.gather(*tasks)
     out = {name: urls for name, urls in results}
@@ -656,8 +663,8 @@ def source_label(url: str) -> str:
     if "news.ycombinator.com" in url: return "HackerNews"
     if "betalist.com" in url: return "BetaList"
     if "goodfirms.co" in url: return "GoodFirms"
-    if "g2.com" in url: return "G2"
-    if "capterra.com" in url: return "Capterra"
+    if "trustpilot.com" in url: return "Trustpilot"
+    if "appsumo.com" in url: return "AppSumo"
     for s in SHOUTOUT_SITES:
         if s in url:
             return s.replace(".com", "").replace("shoutout", "ShoutOut").title()
