@@ -404,6 +404,37 @@ async def retry_no_parse():
     return {"ok": True, "cleared": cleared, "msg": f"Cleared {cleared} no_parse URLs. Claude will retry them in the next batch."}
 
 
+@app.get("/admin/reset-all")
+@app.post("/admin/reset-all")
+async def admin_reset_all():
+    """NUCLEAR option — clears ALL seen_urls rows including 'parsed'.
+
+    Use this when the engine is stuck with 0 leads and pool recycling hasn't
+    helped. The engine restarts completely fresh on the next batch.
+
+    Safe because:
+    - save_verified() deduplicates by email — no duplicate leads stored
+    - save_raw_lead() deduplicates by source_url — no duplicate raw rows
+    Only the 'already processed' dedup filter is cleared, not the actual leads.
+    """
+    from sqlalchemy import delete as sql_delete
+    from db import SeenURL
+    async with SessionLocal() as s:
+        r = await s.execute(sql_delete(SeenURL))
+        total = r.rowcount
+        await s.commit()
+    log.info(f"admin reset-all: cleared ALL {total} seen_urls rows")
+    return {
+        "ok": True,
+        "total_cleared": total,
+        "msg": (
+            f"Cleared ALL {total} seen_urls rows (including 'parsed'). "
+            "The engine will reprocess every source from scratch. "
+            "Verified leads are untouched — deduplication prevents re-adding them."
+        ),
+    }
+
+
 @app.get("/admin/reset-seen")
 @app.post("/admin/reset-seen")
 async def admin_reset_seen(

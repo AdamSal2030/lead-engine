@@ -144,25 +144,38 @@ def _is_personal_email(email: str, name: str) -> bool:
     return True
 
 
+_ROLE_LOCALS = {"founder", "ceo", "owner", "cto", "coo", "president",
+                "director", "md", "gm", "partner", "principal"}
+
+
+def _is_acceptable_email(email: str, name: str) -> bool:
+    """True if email is worth including (personal OR role-based)."""
+    local = email.split("@")[0].lower()
+    if local in _ROLE_LOCALS:
+        return True  # founder@, ceo@, owner@ are decision-maker addresses
+    return _is_personal_email(email, name)
+
+
 async def verify_lead(lead: dict) -> dict | None:
     """Verify email candidates using MillionVerifier (primary) then Reoon (fallback).
 
     Acceptance tiers:
-      Tier A (preferred): MV result="ok" — confirmed safe, deliverable
-      Tier A (catch-all): MV result="catch_all" + email looks personal → include with flag
-      Tier A (unknown):   MV result="unknown" + email came from Skrapp → include (Skrapp
-                          confirmed pattern, MV couldn't SMTP-check — still worth sending)
+      Tier A (ok):        MV result="ok" — confirmed deliverable
+      Tier A (catch-all): MV result="catch_all" + email is personal OR role-based
+                          (founder@, ceo@, owner@ etc.) — domain catches all, email
+                          format is plausible for the decision-maker
+      Tier A (unknown):   MV result="unknown" + email is personal → try Reoon;
+                          if Reoon also says safe/valid → accept
       Reoon fallback:     MV disabled/errored → use Reoon safe/valid result
 
-    We try up to 12 candidates (was 6) to give more emails a shot.
+    We try up to 15 candidates; ranking already puts best ones first.
     """
     from pipeline import mv_verifier as mv
     candidates = lead.get("email_candidates", [])
     if not candidates:
         return None
 
-    # Try up to 12 candidates; ranking already puts best ones first
-    sorted_c = list(candidates)[:12]
+    sorted_c = list(candidates)[:15]
     founder_name = lead.get("name", "")
 
     for email in sorted_c:
@@ -185,9 +198,10 @@ async def verify_lead(lead: dict) -> dict | None:
                     },
                 }
 
-            # Catch-all domain — include if the email looks personal
-            # (small-biz domains often are catch-all but the email is real)
-            if result == "catch_all" and _is_personal_email(email, founder_name):
+            # Catch-all domain — accept if email is personal OR a decision-maker
+            # role address. Small-biz domains are often catch-all; these addresses
+            # reach real people even if SMTP can't confirm the exact mailbox.
+            if result == "catch_all" and _is_acceptable_email(email, founder_name):
                 return {
                     **lead,
                     "verified_email": email,
@@ -198,24 +212,15 @@ async def verify_lead(lead: dict) -> dict | None:
                     },
                 }
 
-            # Unknown — MV couldn't reach SMTP. Accept if Skrapp specifically found it.
+            # Unknown — MV couldn't reach SMTP server. Don't hard-reject;
+            # fall through to Reoon which uses multiple IPs/methods.
             if result == "unknown":
-                # Check if this email came from Skrapp (first in candidates = Skrapp insert)
-                skrapp_email = candidates[0] if candidates else None
-                if email == skrapp_email and _is_personal_email(email, founder_name):
-                    return {
-                        **lead,
-                        "verified_email": email,
-                        "verification": {
-                            "status": "unknown", "verifier": "mv",
-                            "result": result, "is_catch_all": None, "score": 55, "tier": "A",
-                        },
-                    }
-                # Fall through to Reoon for unknown
-            elif result in ("invalid", "disposable"):
-                continue  # hard reject — don't waste a Reoon call
+                pass  # fall through to Reoon below
 
-        # FALLBACK: Reoon (when MV failed, errored, or gave unknown)
+            elif result in ("invalid", "disposable"):
+                continue  # hard reject — confirmed non-existent, skip Reoon
+
+        # FALLBACK: Reoon (when MV failed, errored, or gave unknown/catch_all-rejected)
         res = await verify_email(email)
         if not res:
             continue
@@ -223,9 +228,9 @@ async def verify_lead(lead: dict) -> dict | None:
         is_catch = res.get("is_catch_all")
         score = res.get("overall_score") or 0
 
-        # Accept safe/valid regardless of catch-all if email is personal
+        # Accept safe/valid: if catch-all, still accept if email looks acceptable
         if status in ("safe", "valid"):
-            if not is_catch or _is_personal_email(email, founder_name):
+            if not is_catch or _is_acceptable_email(email, founder_name):
                 return {
                     **lead,
                     "verified_email": email,
@@ -234,5 +239,17 @@ async def verify_lead(lead: dict) -> dict | None:
                         "score": score, "is_catch_all": is_catch, "tier": "A",
                     },
                 }
+
+        # Reoon "risky" — still accept if it's a personal/role email on a catch-all
+        # domain. "risky" from Reoon usually just means catch-all, not truly bad.
+        if status == "risky" and is_catch and _is_acceptable_email(email, founder_name):
+            return {
+                **lead,
+                "verified_email": email,
+                "verification": {
+                    "status": "risky_catch_all", "verifier": "reoon",
+                    "score": score, "is_catch_all": True, "tier": "A",
+                },
+            }
 
     return None

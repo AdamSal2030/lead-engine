@@ -118,6 +118,66 @@ async def clear_old_claude_no_parse(days: int = 7) -> int:
         return result.rowcount
 
 
+# Article sources that produce personal-name leads — safe to recycle
+# because save_verified() deduplicates by email address.
+ARTICLE_SOURCES = {
+    "canvasrebel", "boldjourney", "valiantceo", "founderhour",
+    "authority_magazine", "ideamensch", "hackernews", "betalist",
+    "indiehackers",
+    # Voyage network
+    "voyagela", "voyageatl", "voyagemia", "voyagedallas", "voyagehouston",
+    "voyageraleigh", "voyagestl", "voyagekc", "voyageaustin", "voyagechicago",
+    "voyageohio", "voyageminnesota", "voyageutah", "voyagebaltimore",
+    "voyagecharlotte", "voyagevirginia", "voyagewisconsin", "voyagewashington",
+    "voyagealabama", "voyagemichigan", "voyagephoenix", "voyagedenver",
+    "voyagesf", "voyagerichmond", "voyageindy", "voyagesd", "voyagememphis",
+    "voyagephilly", "voyagenashville", "voyageportland", "voyageseattle", "voyageny",
+    # ShoutOut network
+    "shoutoutla", "shoutoutatl", "shoutoutdfw", "shoutoutsocal", "shoutoutnorcal",
+    # PR sites
+    "ceoweekly", "famoustimes", "disruptmagazine", "ceomonthly",
+    "americanentrepreneurship", "ceoblognation", "addicted2success",
+    "thriveglobal", "beingentrepreneur", "gritdaily", "influencive",
+    # NewsAnchored strict
+    "nyweekly", "lawire", "kivodaily", "usinsider", "usbusinessnews",
+    "worldreporter", "marketdaily", "economicinsider", "portlandnews",
+    "miamiwire", "nywire", "atlwire", "texastoday", "sanfranciscopost",
+    "cagazette", "californiaobserver", "thechicagojournal", "womensjournal",
+    "blknews", "influencerdaily", "artistweekly", "usreporter",
+    "theamericannews", "realestatetoday",
+}
+
+
+async def clear_stale_parsed(days: int = 30) -> int:
+    """Clear 'parsed' status for ARTICLE source URLs older than N days.
+
+    KEY INSIGHT: 'parsed' means email candidates were found and sent to the
+    verifier — NOT that a verified lead was produced. Many 'parsed' URLs had
+    candidates that all failed verification (e.g. all guesses were 'invalid').
+    The pipeline has improved since then (better patterns, better verifier
+    thresholds) — these URLs deserve another shot.
+
+    Safe because:
+    - save_raw_lead() deduplicates by source_url → no duplicate raw rows
+    - save_verified() deduplicates by email → no duplicate verified leads
+    - Only fires for article sources (personal names), never directory sources
+      (company names) which would just waste time reprocessing junk.
+    """
+    from sqlalchemy import delete
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    async with SessionLocal() as s:
+        result = await s.execute(
+            delete(SeenURL).where(
+                SeenURL.status == "parsed",
+                SeenURL.source.in_(ARTICLE_SOURCES),
+                SeenURL.first_seen < cutoff,
+            )
+        )
+        await s.commit()
+        return result.rowcount
+
+
 async def mark_seen(url: str, source: str, status: str):
     async with SessionLocal() as s:
         s.add(SeenURL(url=url, source=source, status=status))
@@ -404,6 +464,13 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
             if cnp_cleared:
                 log.info(f"  Cleared {cnp_cleared} claude_no_parse URLs older than 7 days")
 
+            # Stale-parsed refresh: article source URLs older than 30 days get
+            # reprocessed. 'parsed' means candidates were found but verification
+            # may have failed. The improved pipeline catches more leads now.
+            sp_cleared = await clear_stale_parsed(days=30)
+            if sp_cleared:
+                log.info(f"  Recycled {sp_cleared} stale 'parsed' article URLs (>30 days old)")
+
             # Verify concurrency scales with # of Reoon keys
             from pipeline.reoon_pool import get_pool as _pool
             n_keys = max(1, len(_pool()))
@@ -418,13 +485,21 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
             max_wall_seconds = settings.BATCH_MAX_HOURS * 3600
             _exhausted = False
 
+            # Batch-level counters for diagnosing where leads die
+            _stage = {"parsed": 0, "no_parse": 0, "no_emails": 0,
+                      "verify_ok": 0, "verify_fail": 0}
+
             async def verify_and_save(raw: dict):
                 async with sem_verify:
                     v = await verify_lead(raw)
                     if v:
                         added = await save_verified(v, batch_id)
                         if added:
+                            _stage["verify_ok"] += 1
                             nonlocal_inc()
+                        # else: email duplicate — still a hit, just not a new lead
+                    else:
+                        _stage["verify_fail"] += 1
 
             def nonlocal_inc():
                 nonlocal verified_count
@@ -500,8 +575,11 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                         _current_batch["scraped"] += 1
                         if raw:
                             _current_batch["raw_with_emails"] += 1
+                            _stage["parsed"] += 1
                             t = asyncio.create_task(verify_and_save(raw))
                             verify_tasks.append(t)
+                        else:
+                            _stage["no_parse"] += 1
 
                         if verified_count >= target:
                             log.info(f"Target {target} reached. Stopping URL queue.")
@@ -511,17 +589,34 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
                             target_reached = True
                             break
 
-                        if _current_batch["scraped"] % 100 == 0:
+                        if _current_batch["scraped"] % 200 == 0:
                             el = time.time() - start_time
                             log.info(
                                 f"  [{_current_batch['scraped']} scraped | "
-                                f"{_current_batch['raw_with_emails']} raw | "
-                                f"{verified_count} verified | {el/60:.1f}min]"
+                                f"parse_ok={_stage['parsed']} no_parse={_stage['no_parse']} | "
+                                f"raw_emails={_current_batch['raw_with_emails']} | "
+                                f"verify_ok={_stage['verify_ok']} verify_fail={_stage['verify_fail']} | "
+                                f"leads={verified_count} | {el/60:.1f}min]"
                             )
 
             # Wait for any pending verifies
             if verify_tasks:
                 await asyncio.gather(*verify_tasks, return_exceptions=True)
+
+            # Final pipeline funnel summary — tells you EXACTLY where leads died
+            total_scraped = _current_batch["scraped"]
+            parse_rate = round(100 * _stage["parsed"] / max(total_scraped, 1), 1)
+            verify_rate = round(100 * _stage["verify_ok"] / max(_stage["parsed"], 1), 1)
+            log.info(
+                f"=== Batch {batch_id} pipeline summary ===\n"
+                f"  Scraped URLs:      {total_scraped}\n"
+                f"  Parsed OK:         {_stage['parsed']} ({parse_rate}%)  ← low? pool is mostly failed URLs\n"
+                f"  Parse failed:      {_stage['no_parse']}               ← high? add sources / clear pool\n"
+                f"  Had email cands:   {_current_batch['raw_with_emails']}\n"
+                f"  Verify OK:         {_stage['verify_ok']} ({verify_rate}% of parsed)  ← low? MV/Reoon rejecting\n"
+                f"  Verify failed:     {_stage['verify_fail']}            ← high? check MV credits & Reoon key\n"
+                f"  New leads added:   {verified_count}"
+            )
 
             # 3. Build deliverable CSV for THIS batch
             csv_path = await deliver_batch(batch_id)
