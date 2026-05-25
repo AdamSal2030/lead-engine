@@ -501,20 +501,29 @@ async def run_batch(target: int, trigger: str = "manual") -> dict:
             if cnp_cleared:
                 log.info(f"  Cleared {cnp_cleared} claude_no_parse URLs older than 7 days")
 
-            # Stale-parsed refresh: article source URLs older than 30 days get
+            # Stale-parsed refresh: article source URLs older than 14 days get
             # reprocessed. 'parsed' means candidates were found but verification
-            # may have failed. The improved pipeline catches more leads now.
-            sp_cleared = await clear_stale_parsed(days=30)
+            # may have failed. 14-day cycle doubles throughput vs the old 30-day.
+            sp_cleared = await clear_stale_parsed(days=14)
             if sp_cleared:
                 log.info(f"  Recycled {sp_cleared} stale 'parsed' article URLs (>30 days old)")
 
-            # Verify concurrency scales with # of Reoon keys
+            # Auto-scale verification concurrency based on active verifier.
+            # MillionVerifier handles 1000 RPM → needs 25-40 concurrent to saturate.
+            # Reoon handles 20 RPM per key → more than 4/key causes rate-limit thrashing.
             from pipeline.reoon_pool import get_pool as _pool
+            from pipeline import mv_verifier as _mv
             n_keys = max(1, len(_pool()))
-            verify_concurrency = settings.MAX_VERIFY_CONCURRENCY * n_keys
+            if _mv.get_state().get("enabled"):
+                # MV is primary — 1000 RPM warrants high concurrency
+                verify_concurrency = max(settings.MAX_VERIFY_CONCURRENCY, 40)
+                log.info(f"  MillionVerifier active — verify concurrency = {verify_concurrency}")
+            else:
+                # Reoon-only: 4 concurrent per key keeps inside the 20 RPM limit
+                verify_concurrency = 4 * n_keys
+                log.info(f"  Reoon-only ({n_keys} key(s)) — verify concurrency = {verify_concurrency}")
             sem_scrape = asyncio.Semaphore(settings.SCRAPE_CONCURRENCY)
             sem_verify = asyncio.Semaphore(verify_concurrency)
-            log.info(f"  Using {n_keys} Reoon key(s); verify concurrency = {verify_concurrency}")
 
             verified_count = 0
             verify_tasks: list[asyncio.Task] = []
