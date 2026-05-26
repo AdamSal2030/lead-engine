@@ -173,6 +173,9 @@ SHOUTOUT_SITES = [
 async def voyage_urls(site: str) -> list[str]:
     text = await fetch(f"https://{site}/post-sitemap.xml", try_fallbacks=True)
     if not text:
+        # Voyage network blocks Railway/datacenter IPs — fall back to Wayback Machine
+        text = await fetch_via_wayback(f"https://{site}/post-sitemap.xml")
+    if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)
     pat = re.compile(rf"https://{re.escape(site)}/\d{{4}}/\d{{2}}/\d{{2}}/[^/]+/?$")
@@ -185,6 +188,9 @@ async def shoutout_urls(site: str) -> list[str]:
     text = await fetch(f"https://{site}/post-sitemap.xml", try_fallbacks=True)
     if not text:
         text = await fetch(f"https://{site}/news-sitemap.xml", try_fallbacks=True)
+    if not text:
+        # ShoutOut network also blocks Railway IPs — fall back to Wayback Machine
+        text = await fetch_via_wayback(f"https://{site}/post-sitemap.xml")
     if not text:
         return []
     urls = re.findall(r"<loc>([^<]+)</loc>", text)

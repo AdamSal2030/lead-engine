@@ -92,7 +92,8 @@ NON_PERSON = {
     "events","life",
 }
 
-JUNK_DOMAINS = {"sentry.io", "wixpress.com", "example.com", "domain.com", "test.com"}
+JUNK_DOMAINS = {"sentry.io", "wixpress.com", "example.com", "domain.com", "test.com",
+                "web.archive.org", "archive.org"}
 JUNK_DOMAIN_SUBSTR = [
     "sentry.io", "wixpress.com", "godaddy.com", "shopify.com", "squarespace.com",
     "cloudflare", "amazonaws", "cloudfront", "google-analytics", "googletagmanager",
@@ -124,13 +125,29 @@ UA_LIST = [
 ]
 
 
+# Sites known to block datacenter IPs — skip direct attempts, go straight to Wayback.
+# Voyage/ShoutOut network is also blocked but detected dynamically via 403 response.
 CLOUDFLARE_BLOCKED_HOSTS = ("canvasrebel.com", "boldjourney.com")
+# Voyage + ShoutOut: all these block Railway/datacenter IPs — use Wayback directly
+_WAYBACK_ONLY_PATTERNS = ("voyagela.com", "voyagemia.com", "voyagedallas.com",
+                           "voyagehouston.com", "voyageraleigh.com", "voyagestl.com",
+                           "voyagekc.com", "voyageaustin.com", "voyagechicago.com",
+                           "voyageohio.com", "voyageminnesota.com", "voyageutah.com",
+                           "voyagebaltimore.com", "voyagecharlotte.com", "voyagevirginia.com",
+                           "voyagewisconsin.com", "voyagewashington.com", "voyagealabama.com",
+                           "voyagemichigan.com", "voyagephoenix.com", "voyagedenver.com",
+                           "voyagesf.com", "voyagerichmond.com", "voyageindy.com",
+                           "voyagesd.com", "voyagememphis.com", "voyagephilly.com",
+                           "voyagenashville.com", "voyageportland.com", "voyageseattle.com",
+                           "voyageatl.com", "voyageny.com",
+                           "shoutoutla.com", "shoutoutatl.com", "shoutoutdfw.com",
+                           "shoutoutsocal.com", "shoutoutnorcal.com")
 
 
 async def fetch(url: str, timeout: int = 15) -> str | None:
-    """Try multiple UAs. For known Cloudflare-blocked hosts, go directly to Wayback (skip the doomed direct attempts)."""
-    # Fast path: known-blocked → Wayback only
-    if any(h in url for h in CLOUDFLARE_BLOCKED_HOSTS):
+    """Try direct fetch with UA rotation, then fall back to Wayback Machine on 403/block."""
+    # Fast path: known-blocked hosts → Wayback only (skip wasted direct attempts)
+    if any(h in url for h in CLOUDFLARE_BLOCKED_HOSTS + _WAYBACK_ONLY_PATTERNS):
         try:
             wb_url = f"https://web.archive.org/web/2026/{url}"
             async with httpx.AsyncClient(
@@ -145,6 +162,7 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
         return None
 
     # Normal path: try direct fetch with UA rotation
+    got_403 = False
     for ua in UA_LIST:
         try:
             h = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
@@ -152,8 +170,24 @@ async def fetch(url: str, timeout: int = 15) -> str | None:
                 r = await cli.get(url)
                 if r.status_code == 200 and "text/html" in r.headers.get("content-type", "").lower():
                     return r.text
+                if r.status_code in (403, 429, 503):
+                    got_403 = True
         except Exception:
             continue
+
+    # Auto-fallback: if all direct attempts were blocked, try Wayback Machine
+    if got_403:
+        try:
+            wb_url = f"https://web.archive.org/web/2026/{url}"
+            async with httpx.AsyncClient(
+                headers={"User-Agent": UA_LIST[0]},
+                timeout=30, follow_redirects=True,
+            ) as cli:
+                r = await cli.get(wb_url)
+                if r.status_code == 200 and len(r.text) > 200:
+                    return r.text
+        except Exception:
+            pass
     return None
 
 
@@ -165,9 +199,14 @@ def _try_parse_segment(seg: str) -> str | None:
     # Strip comma-separated role/credential anywhere after first two words
     # e.g. "Jane Smith, CEO" → "Jane Smith" | "John Doe, Ph.D." → "John Doe"
     name = re.sub(r",\s*\S.*$", "", name).strip()
-    # Strip standalone credential abbreviations
-    name = re.sub(r"\s+(MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|[A-Z]{2,5}-?[A-Z]{2,5})\s*$",
+    # Strip standalone credential abbreviations.
+    # IMPORTANT: named credentials use IGNORECASE; the catch-all MUST be case-sensitive
+    # ([A-Z]{2,5} only) so that mixed-case last names (Smith, Johnson, Malhotra …)
+    # are never mistaken for abbreviations.
+    name = re.sub(r"\s+(?:MD|PhD|DDS|JD|MBA|CPA|RN|LCSW|MFT|ATR-BC|NCC|LPC|LMFT|CPCC|PCC|MCC)\s*$",
                   "", name, flags=re.IGNORECASE).strip()
+    # All-caps abbreviations only — no IGNORECASE flag so lowercase letters disqualify the word
+    name = re.sub(r"\s+[A-Z]{2,6}(?:-[A-Z]{2,6})?\s*$", "", name).strip()
     # Strip honorifics
     name = re.sub(r"^(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Prof\.?|Rev\.?|Chef|Coach|DJ)\s+",
                   "", name, flags=re.IGNORECASE)
@@ -296,6 +335,15 @@ def find_website(body, body_text: str, page_url: str) -> str | None:
         if not h.startswith("http"):
             continue
         h_clean = h.split("?")[0].split("#")[0].rstrip("/")
+
+        # Unwrap Wayback Machine URLs: https://web.archive.org/web/TIMESTAMP/ORIGINAL
+        # These appear when pages are fetched via archive.org (Cloudflare-blocked hosts).
+        if "web.archive.org/web/" in h_clean:
+            wb_m = re.match(r"https?://web\.archive\.org/web/\d+/(https?://.+)", h_clean)
+            if wb_m:
+                h_clean = wb_m.group(1).split("?")[0].split("#")[0].rstrip("/")
+            else:
+                continue  # Unrecognised archive URL — skip
 
         # Skip same-domain links (back-links to interview site)
         link_domain = h_clean.split("/")[2].lower() if h_clean.startswith("http") else ""
