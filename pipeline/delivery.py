@@ -34,11 +34,17 @@ COLUMNS = [
 
 
 def _clean(val) -> str:
-    """Strip whitespace variants that break Instantly and other importers."""
-    import re as _re
+    """Strip ALL whitespace variants (including Unicode) that break Instantly."""
+    import re as _re, unicodedata as _ud
     v = str(val or "")
-    v = _re.sub(r'[\r\n\t]+', ' ', v)   # newlines/tabs → space
-    v = _re.sub(r' {2,}', ' ', v)        # collapse multiple spaces
+    # Remove zero-width / invisible Unicode chars (U+200B, U+FEFF, U+00AD etc.)
+    v = _re.sub(r'[­​‌‍‎‏‪-‮⁠﻿]', '', v)
+    # Collapse newlines/tabs to space
+    v = _re.sub(r'[\r\n\t]+', ' ', v)
+    # Strip C0/C1 control chars
+    v = ''.join(c for c in v if _ud.category(c) != 'Cc')
+    # Collapse multiple spaces
+    v = _re.sub(r' {2,}', ' ', v)
     return v.strip()
 
 
