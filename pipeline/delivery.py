@@ -23,30 +23,32 @@ from config import settings
 
 log = logging.getLogger("delivery")
 
-# Column order for export
+# Column order for export.
+# Headers are whitespace-free so Instantly (and other tools) import without errors.
+# Instantly auto-maps "firstName", "lastName", "email" — keep those exact names.
 COLUMNS = [
-    "Tier", "First Name", "Last Name", "Email", "Role", "Niche",
-    "Business", "Website", "Source", "Source URL",
-    "Reoon Status", "Score", "Catch-All", "Hook",
+    "email", "firstName", "lastName", "role", "niche",
+    "company", "website", "tier", "source", "sourceUrl",
+    "verifyStatus", "score", "catchAll", "hook",
 ]
 
 
 def _lead_row(l: VerifiedLead) -> list:
     return [
-        l.tier or "A",
-        l.first_name or "",
-        l.last_name or "",
         l.email,
-        l.role or "",
-        l.niche or "Founder / Startup",
-        l.company or "",
-        l.website or "",
-        l.source or "",
-        l.source_url or "",
-        l.reoon_status or "",
+        (l.first_name or "").strip(),
+        (l.last_name or "").strip(),
+        (l.role or "").strip(),
+        (l.niche or "Founder / Startup").strip(),
+        (l.company or "").strip(),
+        (l.website or "").strip(),
+        l.tier or "A",
+        (l.source or "").strip(),
+        (l.source_url or "").strip(),
+        (l.reoon_status or "").strip(),
         l.reoon_score or "",
         "Yes" if l.is_catch_all else "No",
-        l.hook or "",
+        (l.hook or "").strip(),
     ]
 
 
