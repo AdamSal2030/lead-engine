@@ -33,22 +33,31 @@ COLUMNS = [
 ]
 
 
+def _clean(val) -> str:
+    """Strip whitespace variants that break Instantly and other importers."""
+    import re as _re
+    v = str(val or "")
+    v = _re.sub(r'[\r\n\t]+', ' ', v)   # newlines/tabs → space
+    v = _re.sub(r' {2,}', ' ', v)        # collapse multiple spaces
+    return v.strip()
+
+
 def _lead_row(l: VerifiedLead) -> list:
     return [
-        l.email,
-        (l.first_name or "").strip(),
-        (l.last_name or "").strip(),
-        (l.role or "").strip(),
-        (l.niche or "Founder / Startup").strip(),
-        (l.company or "").strip(),
-        (l.website or "").strip(),
+        _clean(l.email),
+        _clean(l.first_name),
+        _clean(l.last_name),
+        _clean(l.role),
+        _clean(l.niche or "Founder / Startup"),
+        _clean(l.company),
+        _clean(l.website),
         l.tier or "A",
-        (l.source or "").strip(),
-        (l.source_url or "").strip(),
-        (l.reoon_status or "").strip(),
+        _clean(l.source),
+        _clean(l.source_url),
+        _clean(l.reoon_status),
         l.reoon_score or "",
         "Yes" if l.is_catch_all else "No",
-        (l.hook or "").strip(),
+        _clean(l.hook),
     ]
 
 
