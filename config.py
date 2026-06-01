@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Skrapp email finder (Layer 4 — fires only when free extraction fails)
     SKRAPP_API_KEY: str = ""
     SKRAPP_ENABLED: bool = True  # auto-disables when quota exhausted; restart to retry
-    SKRAPP_DAILY_CAP: int = 2000  # hard per-day call ceiling (safety rail; 0 = unlimited)
+    SKRAPP_DAILY_CAP: int = 3000  # hard per-day call ceiling (safety rail; 0 = unlimited)
 
     # Instantly unibox integration (reply tracking)
     INSTANTLY_API_KEY: str = ""  # base64 'uuid:secret' bearer token
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # Backwards-compat
     DEFAULT_TARGET: int = 2000
     MAX_VERIFY_CONCURRENCY: int = 40     # MV handles 1000 RPM → 40 concurrent fine
-    SCRAPE_CONCURRENCY: int = 15         # conservative — Railway 512MB headroom
+    SCRAPE_CONCURRENCY: int = 20         # raised from 15 for throughput — still within 512MB
     EMAIL_FIND_CONCURRENCY: int = 6      # parallel page fetches per founder website
     SKRAPP_CONCURRENCY: int = 6          # parallel Skrapp calls
 
