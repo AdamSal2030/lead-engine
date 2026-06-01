@@ -15,6 +15,7 @@ Returned dict shape matches the interview parser output so the orchestrator
 (process_one_url) can treat both paths identically.
 """
 import re
+import json
 import logging
 from bs4 import BeautifulSoup
 from pipeline.parser import fetch, extract_emails
@@ -83,6 +84,102 @@ def _extract_website(soup: BeautifulSoup, page_url: str) -> str | None:
     return None
 
 
+# Decision-maker roles worth reaching (used by both JSON-LD jobTitle and text regex)
+_FOUNDER_ROLES = (
+    "CEO", "Chief Executive Officer", "Chief Executive", "Founder", "Co-Founder",
+    "Cofounder", "Co Founder", "Founder & CEO", "Owner", "Co-Owner", "President",
+    "Managing Director", "Managing Partner", "Principal", "Creator", "Director",
+    "Partner", "Proprietor",
+)
+_ROLE_ALT = "|".join(re.escape(r) for r in sorted(_FOUNDER_ROLES, key=len, reverse=True))
+# Broader name matcher than the old "[A-Z][a-z]+ [A-Z][a-z]+":
+# 2-3 tokens, allows initials, hyphens, apostrophes and accented letters.
+_NAME_RX = r"[A-ZÀ-Ý][A-Za-zÀ-ÿ'’\.\-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’\.\-]+){1,2}"
+
+
+def _walk_jsonld(node) -> list[str]:
+    """Recursively collect Person names from a parsed JSON-LD node."""
+    found: list[str] = []
+    if isinstance(node, list):
+        for x in node:
+            found.extend(_walk_jsonld(x))
+        return found
+    if not isinstance(node, dict):
+        return found
+    types = node.get("@type")
+    types = types if isinstance(types, list) else [types]
+    if "Person" in types:
+        nm = node.get("name")
+        if isinstance(nm, str) and nm.strip():
+            found.append(nm.strip())
+    # Explicit decision-maker fields
+    for key in ("founder", "founders", "employee", "employees", "author"):
+        if key in node:
+            found.extend(_walk_jsonld(node[key]))
+    # Nested containers
+    for key in ("@graph", "mainEntity", "about", "subOrganization", "memberOf"):
+        if key in node:
+            found.extend(_walk_jsonld(node[key]))
+    return found
+
+
+def _names_from_jsonld(soup: BeautifulSoup) -> list[str]:
+    """Pull candidate Person names from all schema.org JSON-LD blocks on the page."""
+    out: list[str] = []
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = tag.string or tag.get_text() or ""
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            # Some sites concatenate multiple JSON objects or have trailing commas
+            continue
+        out.extend(_walk_jsonld(data))
+    return out
+
+
+def extract_founder_name(soup: BeautifulSoup, body_text: str | None = None) -> str | None:
+    """Best-effort founder/decision-maker name from a directory profile page.
+
+    Order of preference:
+      1. schema.org JSON-LD (founder / employee / Person nodes) — most reliable
+      2. Role-adjacent regex over the page text ("CEO: Jane Smith",
+         "Jane Smith, Founder", "Founded by Jane Smith")
+
+    Every candidate is validated through the strict name parser, so company
+    names and junk get rejected.
+    """
+    from pipeline.parser import _try_parse_segment
+
+    def _norm(s: str) -> str:
+        # Normalise curly apostrophes so the strict validator accepts O’Brien etc.
+        return s.replace("’", "'").replace("‘", "'")
+
+    # 1. Structured data — strongest signal
+    for cand in _names_from_jsonld(soup):
+        name = _try_parse_segment(_norm(cand))
+        if name:
+            return name
+
+    # 2. Role-adjacent text. The role/keyword scaffolding is case-insensitive via
+    # scoped (?i:...) groups, but the captured ({_NAME_RX}) stays case-sensitive so
+    # capitalisation still identifies a real name (and not lowercase prose).
+    if body_text is None:
+        body_text = soup.get_text(" ", strip=True)
+    patterns = [
+        rf"(?i:{_ROLE_ALT})(?i:\s*(?:[:\-–—]|is(?:\s+the)?|,)?\s*)({_NAME_RX})",
+        rf"({_NAME_RX})(?i:\s*,?\s+(?:is\s+(?:the\s+)?)?(?:{_ROLE_ALT})\b)",
+        rf"(?i:(?:Founded|Created|Started|Led|Run)\s+by\s+)({_NAME_RX})",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, body_text):
+            name = _try_parse_segment(_norm(m.group(1)))
+            if name:
+                return name
+    return None
+
+
 async def parse_clutch_profile(url: str) -> dict | None:
     """Parse a Clutch.co company profile.
     Extracts: company name, website, industry/niche from the profile page.
@@ -103,22 +200,8 @@ async def parse_clutch_profile(url: str) -> dict | None:
     if not website:
         return None
 
-    # Try to extract a person name from "About" / "CEO" / "Founder" mentions
-    body_text = soup.get_text(" ", strip=True)
-    person_name = None
-
-    # Clutch often has "Founded by [Name]" or "CEO: [Name]"
-    for pat in [
-        r"(?:Founded by|CEO:|Founder:|Founded by CEO)\s+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|President)",
-    ]:
-        m = re.search(pat, body_text)
-        if m:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(m.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    # Founder/decision-maker name — JSON-LD structured data first, then role-adjacent text
+    person_name = extract_founder_name(soup)
 
     # Niche: use service category tags on Clutch
     from pipeline.niche import classify
@@ -323,20 +406,8 @@ async def parse_betalist_startup(url: str) -> dict | None:
     if not website:
         return None
 
-    # Try to find founder name
-    body_text = soup.get_text(" ", strip=True)
-    person_name = None
-    for pat in [
-        r"(?:Founded by|Made by|Created by|By)\s+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:Founder|CEO|Co-Founder|Owner)",
-    ]:
-        nm = re.search(pat, body_text)
-        if nm:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(nm.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    # Founder name — JSON-LD first, then role-adjacent text
+    person_name = extract_founder_name(soup)
 
     article_emails = extract_emails(str(soup))
 
@@ -377,19 +448,7 @@ async def parse_goodfirms_profile(url: str) -> dict | None:
     if not website:
         return None
 
-    body_text = soup.get_text(" ", strip=True)
-    person_name = None
-    for pat in [
-        r"(?:CEO|Founder|Co-Founder|Owner|Managing Director|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner|Managing Director)",
-    ]:
-        nm = re.search(pat, body_text)
-        if nm:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(nm.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    person_name = extract_founder_name(soup)
 
     from pipeline.niche import classify
 
@@ -449,19 +508,8 @@ async def parse_trustpilot_business(url: str) -> dict | None:
             clean = re.sub(r"^Reviews?\s+(?:of|for)\s+", "", raw, flags=re.IGNORECASE).strip()
             if clean and len(clean) < 100:
                 company_name = clean
-        body_text = soup.get_text(" ", strip=True)
-        # Try to find a person name (CEO/founder sometimes mentioned in reviews)
-        for pat in [
-            r"(?:CEO|Founder|Co-Founder|Owner|President)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
-            r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Co-Founder|Owner)",
-        ]:
-            nm = re.search(pat, body_text)
-            if nm:
-                from pipeline.parser import _try_parse_segment
-                candidate = _try_parse_segment(nm.group(1))
-                if candidate:
-                    person_name = candidate
-                    break
+        # CEO/founder sometimes mentioned on the business page
+        person_name = extract_founder_name(soup)
         article_emails = list(extract_emails(str(soup)))
 
     from pipeline.niche import classify
@@ -520,19 +568,7 @@ async def parse_appsumo_product(url: str) -> dict | None:
     if not website:
         return None
 
-    body_text = soup.get_text(" ", strip=True)
-    person_name = None
-    for pat in [
-        r"(?:Founder|CEO|Creator|Made by|Created by)[:\s]+([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:Founder|CEO|Creator)",
-    ]:
-        nm = re.search(pat, body_text)
-        if nm:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(nm.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    person_name = extract_founder_name(soup)
 
     article_emails = list(extract_emails(str(soup)))
     from pipeline.niche import classify
@@ -568,20 +604,8 @@ async def parse_designrush_profile(url: str) -> dict | None:
     if not website:
         return None
 
-    # Try person name extraction
-    body_text = soup.get_text(" ", strip=True)
-    person_name = None
-    for pat in [
-        r"(?:CEO|Founder|Managing Director|Owner):\s*([A-Z][a-z]+ [A-Z][a-z]+)",
-        r"([A-Z][a-z]+ [A-Z][a-z]+),?\s+(?:CEO|Founder|Managing Director|Owner)",
-    ]:
-        m = re.search(pat, body_text)
-        if m:
-            from pipeline.parser import _try_parse_segment
-            candidate = _try_parse_segment(m.group(1))
-            if candidate:
-                person_name = candidate
-                break
+    # Founder name — JSON-LD first, then role-adjacent text
+    person_name = extract_founder_name(soup)
 
     from pipeline.niche import classify
     niche = classify(None, company_name, None, website)
