@@ -321,7 +321,7 @@ async def clutch_urls(max_pages: int = 20) -> list[str]:
             if not filtered:
                 break
     log.info(f"Clutch: found {len(all_urls)} profile URLs")
-    return all_urls[:100]  # cap to prevent overwhelming the queue
+    return all_urls[:1000]  # cap to prevent overwhelming the queue
 
 
 async def indiehackers_urls() -> list[str]:
@@ -367,7 +367,7 @@ async def designrush_urls(max_pages: int = 12) -> list[str]:
         if not filtered and n > 1:
             break
     log.info(f"DesignRush: found {len(all_urls)} URLs")
-    return all_urls[:100]
+    return all_urls[:500]
 
 
 async def hackernews_showhn_urls(limit: int = 600) -> list[str]:
@@ -550,7 +550,7 @@ async def goodfirms_urls(max_pages: int = 15) -> list[str]:
             if not filtered:
                 break
     log.info(f"GoodFirms: found {len(all_urls)} URLs")
-    return all_urls[:100]
+    return all_urls[:1000]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:

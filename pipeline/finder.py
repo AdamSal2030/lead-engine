@@ -13,6 +13,7 @@ import asyncio
 import logging
 import urllib.parse
 import httpx
+from datetime import datetime
 from sqlalchemy import select, insert, update
 from config import settings
 from db import SessionLocal, Counter, Base
@@ -26,6 +27,51 @@ _counter_loaded = False
 SKRAPP_CALLS = 0
 SKRAPP_HITS = 0  # successful finds (got an email back)
 _lock = asyncio.Lock()
+
+# --- Daily-cap state (safety rail so Skrapp can't run away) ---
+# Persisted per-day in the Counter table (key "skrapp_daily_YYYYMMDD") so a
+# Railway redeploy mid-day reloads the running total instead of resetting to 0.
+_today_str = ""
+_today_calls = 0
+
+
+async def _check_daily_cap() -> bool:
+    """True if we're still under today's Skrapp call ceiling."""
+    global _today_str, _today_calls
+    cap = settings.SKRAPP_DAILY_CAP
+    if cap <= 0:
+        return True  # unlimited
+    today = datetime.utcnow().strftime("%Y%m%d")
+    if today != _today_str:
+        # New day (or first call after a redeploy) — reload running total from DB
+        _today_str = today
+        try:
+            async with SessionLocal() as s:
+                row = (await s.execute(
+                    select(Counter).where(Counter.key == f"skrapp_daily_{today}")
+                )).scalar_one_or_none()
+                _today_calls = row.value if row else 0
+        except Exception:
+            _today_calls = 0
+    return _today_calls < cap
+
+
+async def _incr_daily():
+    """Bump today's counter and persist every few calls."""
+    global _today_calls
+    _today_calls += 1
+    if _today_calls % 5 == 0:
+        try:
+            async with SessionLocal() as s:
+                key = f"skrapp_daily_{_today_str}"
+                row = (await s.execute(select(Counter).where(Counter.key == key))).scalar_one_or_none()
+                if row:
+                    await s.execute(update(Counter).where(Counter.key == key).values(value=_today_calls))
+                else:
+                    await s.execute(insert(Counter).values(key=key, value=_today_calls))
+                await s.commit()
+        except Exception:
+            pass
 
 # True mega-corps — Skrapp returns generic/catch-all for these, waste of a credit
 # NOTE: intentionally small list — only add when Skrapp is confirmed to fail there.
@@ -139,7 +185,7 @@ async def find_email(first_name: str, last_name: str, domain: str) -> dict | Non
 
     await _load_counter()
 
-    # Cache hit?
+    # Cache hit? (cache never counts against the daily cap — no API call)
     cached = await _cache_lookup(first, last, domain)
     if cached:
         if cached.email:
@@ -147,8 +193,14 @@ async def find_email(first_name: str, last_name: str, domain: str) -> dict | Non
                     "source": "skrapp_cache"}
         return None  # cached miss
 
+    # Daily safety cap — only gates real (uncached) API calls
+    if not await _check_daily_cap():
+        log.info(f"Skrapp daily cap ({settings.SKRAPP_DAILY_CAP}) reached — skipping live calls until tomorrow")
+        return None
+
     # Real call
     SKRAPP_CALLS += 1
+    await _incr_daily()
     if SKRAPP_CALLS % 5 == 0:
         await _persist()
 
@@ -201,4 +253,6 @@ def get_state() -> dict:
         "quota_exhausted": _quota_exhausted,
         "calls": SKRAPP_CALLS,
         "hits": SKRAPP_HITS,
+        "today_calls": _today_calls,
+        "daily_cap": settings.SKRAPP_DAILY_CAP,
     }
