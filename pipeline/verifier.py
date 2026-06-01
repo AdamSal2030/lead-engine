@@ -156,55 +156,64 @@ def _is_personal_email(email: str, name: str) -> bool:
     return True
 
 
-_ROLE_LOCALS = {"founder", "ceo", "owner", "cto", "coo", "president",
-                "director", "md", "gm", "partner", "principal",
-                "chief", "cofounder", "co-founder", "operator",
-                "head", "managing", "exec"}
-
-
 def _is_acceptable_email(email: str, name: str) -> bool:
-    """True if email is worth including (personal OR role-based)."""
-    local = email.split("@")[0].lower()
-    if local in _ROLE_LOCALS:
-        return True  # founder@, ceo@, owner@ are decision-maker addresses
+    """True if this email is worth attempting verification.
+    Blocks generic role/dept addresses that go to support desks, not founders.
+    """
     return _is_personal_email(email, name)
 
 
 async def verify_lead(lead: dict) -> dict | None:
-    """Verify email candidates using MillionVerifier (primary) then Reoon (fallback).
+    """Verify email candidates. Strict rules to minimise bounces and wasted credits.
 
-    Acceptance tiers:
-      Tier A (ok):        MV result="ok" — confirmed deliverable
-      Tier A (catch-all): MV result="catch_all" + email is personal OR role-based
-                          (founder@, ceo@, owner@ etc.) — domain catches all, email
-                          format is plausible for the decision-maker
-      Tier A (unknown):   MV result="unknown" + email is personal → try Reoon;
-                          if Reoon also says safe/valid → accept
-      Reoon fallback:     MV disabled/errored → use Reoon safe/valid result
+    Acceptance tiers (tightest-first):
+      Tier A (ok):         MV "ok" — SMTP-confirmed deliverable. Always accept.
+      Tier A (catch-all):  MV "catch_all" + email local part contains founder's
+                           first OR last name. Catch-all means the domain accepts
+                           anything, but we require a name match to avoid sending
+                           to made-up addresses like founder@domain.com.
+      Reoon safe/valid:    MV unavailable/unknown → Reoon confirms safe/valid.
+                           Non-catch-all: always accept.
+                           Catch-all: require name match (same rule as MV catch-all).
 
-    We try up to 15 candidates; ranking already puts best ones first.
+    REMOVED to cut bounces:
+      - Role emails on catch-all (founder@, ceo@) → bounce too often
+      - Reoon "risky" acceptance → risky means risky
+      - Reoon "unknown" acceptance → too uncertain
+
+    We try up to 8 candidates (down from 15) — most hits come in top 3.
     """
     from pipeline import mv_verifier as mv
     candidates = lead.get("email_candidates", [])
     if not candidates:
         return None
 
-    sorted_c = list(candidates)[:15]
+    # Only check personal-looking emails — skip generic/role addresses entirely
+    personal = [e for e in candidates if _is_personal_email(e, lead.get("name", ""))]
+    if not personal:
+        return None
+
+    sorted_c = personal[:8]   # top 8 personal candidates, best-ranked first
     founder_name = lead.get("name", "")
 
-    for email in sorted_c:
-        # Hard gate: never select generic role addresses (info@, support@, contact@, etc.)
-        # as the outreach email regardless of verification result — they go to support
-        # desks, not founders, and trigger spam complaints.
-        if not _is_acceptable_email(email, founder_name):
-            continue
+    def _name_in_local(email: str) -> bool:
+        """True if founder first or last name appears in the email local part."""
+        local = email.split("@")[0].lower()
+        parts = re.sub(r"[^a-z ]", "", founder_name.lower()).split()
+        first = parts[0] if parts else ""
+        last = parts[-1] if len(parts) > 1 else ""
+        return (
+            (first and len(first) >= 3 and first in local) or
+            (last and len(last) >= 3 and last in local)
+        )
 
-        # PRIMARY: MillionVerifier (fast, cheap)
+    for email in sorted_c:
+        # PRIMARY: MillionVerifier
         mv_res = await mv.verify(email)
         if mv_res:
             result = mv_res.get("result")
 
-            # Best case — confirmed deliverable
+            # Best case — SMTP-confirmed deliverable
             if result == "ok":
                 return {
                     **lead,
@@ -218,29 +227,26 @@ async def verify_lead(lead: dict) -> dict | None:
                     },
                 }
 
-            # Catch-all domain — accept if email is personal OR a decision-maker
-            # role address. Small-biz domains are often catch-all; these addresses
-            # reach real people even if SMTP can't confirm the exact mailbox.
-            if result == "catch_all" and _is_acceptable_email(email, founder_name):
+            # Catch-all — ONLY accept if the founder's name is in the local part.
+            # "jane@acme.com" for Jane Smith → accept.
+            # "founder@acme.com" or "jsmith@unknownco.com" → skip (too risky).
+            if result == "catch_all" and _name_in_local(email):
                 return {
                     **lead,
                     "verified_email": email,
                     "verification": {
                         "status": "catch_all", "verifier": "mv",
                         "result": result, "quality": mv_res.get("quality"),
-                        "is_catch_all": True, "score": 70, "tier": "A",
+                        "is_catch_all": True, "score": 72, "tier": "A",
                     },
                 }
 
-            # Unknown — MV couldn't reach SMTP server. Don't hard-reject;
-            # fall through to Reoon which uses multiple IPs/methods.
-            if result == "unknown":
-                pass  # fall through to Reoon below
+            if result in ("invalid", "disposable", "catch_all"):
+                continue  # hard reject or catch-all without name match — skip Reoon
 
-            elif result in ("invalid", "disposable"):
-                continue  # hard reject — confirmed non-existent, skip Reoon
+            # "unknown" — fall through to Reoon
 
-        # FALLBACK: Reoon (when MV failed, errored, or gave unknown/catch_all-rejected)
+        # FALLBACK: Reoon
         res = await verify_email(email)
         if not res:
             continue
@@ -248,9 +254,9 @@ async def verify_lead(lead: dict) -> dict | None:
         is_catch = res.get("is_catch_all")
         score = res.get("overall_score") or 0
 
-        # Accept safe/valid: if catch-all, still accept if email looks acceptable
         if status in ("safe", "valid"):
-            if not is_catch or _is_acceptable_email(email, founder_name):
+            # Non-catch-all: accept freely. Catch-all: require name in local.
+            if not is_catch or _name_in_local(email):
                 return {
                     **lead,
                     "verified_email": email,
@@ -259,43 +265,5 @@ async def verify_lead(lead: dict) -> dict | None:
                         "score": score, "is_catch_all": is_catch, "tier": "A",
                     },
                 }
-
-        # Reoon "risky" — accept on catch-all domains if email looks personal/role.
-        # "risky" from Reoon usually just means catch-all, not truly bad.
-        if status == "risky" and is_catch and _is_acceptable_email(email, founder_name):
-            return {
-                **lead,
-                "verified_email": email,
-                "verification": {
-                    "status": "risky_catch_all", "verifier": "reoon",
-                    "score": score, "is_catch_all": True, "tier": "A",
-                },
-            }
-
-        # Reoon "risky" on non-catch-all — accept if the email clearly contains
-        # the founder's name. Small-biz domains often have misconfigured SPF/MX
-        # which makes Reoon rate them risky even when the mailbox is real.
-        if status == "risky" and not is_catch and _is_personal_email(email, founder_name):
-            return {
-                **lead,
-                "verified_email": email,
-                "verification": {
-                    "status": "risky_personal", "verifier": "reoon",
-                    "score": max(score, 55), "is_catch_all": False, "tier": "A",
-                },
-            }
-
-        # Reoon "unknown" — SMTP server didn't respond / inconclusive. Accept if
-        # the email looks like a real personal address (name-based local part).
-        # These are worth the occasional bounce — missing them costs more leads.
-        if status == "unknown" and _is_personal_email(email, founder_name):
-            return {
-                **lead,
-                "verified_email": email,
-                "verification": {
-                    "status": "unknown_personal", "verifier": "reoon",
-                    "score": 50, "is_catch_all": is_catch, "tier": "A",
-                },
-            }
 
     return None

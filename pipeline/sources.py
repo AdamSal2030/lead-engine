@@ -321,7 +321,7 @@ async def clutch_urls(max_pages: int = 20) -> list[str]:
             if not filtered:
                 break
     log.info(f"Clutch: found {len(all_urls)} profile URLs")
-    return all_urls[:2000]  # cap to prevent overwhelming the queue
+    return all_urls[:100]  # cap to prevent overwhelming the queue
 
 
 async def indiehackers_urls() -> list[str]:
@@ -367,7 +367,7 @@ async def designrush_urls(max_pages: int = 12) -> list[str]:
         if not filtered and n > 1:
             break
     log.info(f"DesignRush: found {len(all_urls)} URLs")
-    return all_urls[:1000]
+    return all_urls[:100]
 
 
 async def hackernews_showhn_urls(limit: int = 600) -> list[str]:
@@ -474,7 +474,7 @@ async def trustpilot_urls(max_sitemaps: int = 10) -> list[str]:
                 all_urls.append(u)
     all_urls = list(dict.fromkeys(all_urls))
     log.info(f"Trustpilot: found {len(all_urls)} business URLs")
-    return all_urls[:8000]
+    return all_urls[:200]
 
 
 async def appsumo_urls(max_pages: int = 20) -> list[str]:
@@ -514,7 +514,7 @@ async def appsumo_urls(max_pages: int = 20) -> list[str]:
                 break
     all_urls = list(dict.fromkeys(all_urls))
     log.info(f"AppSumo: found {len(all_urls)} product URLs")
-    return all_urls[:3000]
+    return all_urls[:100]
 
 
 async def goodfirms_urls(max_pages: int = 15) -> list[str]:
@@ -550,7 +550,7 @@ async def goodfirms_urls(max_pages: int = 15) -> list[str]:
             if not filtered:
                 break
     log.info(f"GoodFirms: found {len(all_urls)} URLs")
-    return all_urls[:2000]
+    return all_urls[:100]
 
 
 async def collect_all_urls() -> dict[str, list[str]]:
