@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     SKRAPP_ENABLED: bool = True  # auto-disables when quota exhausted; restart to retry
     SKRAPP_DAILY_CAP: int = 3000  # hard per-day call ceiling (safety rail; 0 = unlimited)
 
+    # Skrapp niche targeting — Skrapp only spends a credit when the lead's classified
+    # niche is in this set. This is how we "search Skrapp for the niches we need":
+    # off-target leads still get FREE email extraction, they just never burn a credit.
+    # Empty string = no gating (fire on every name+domain). Labels MUST match the
+    # niche labels produced by pipeline/niche.py exactly.
+    # "Founder / Startup" is the unclassified catch-all — kept in by default so we
+    # don't lose volume on leads our classifier couldn't label; drop it for stricter
+    # targeting.
+    SKRAPP_TARGET_NICHES: str = (
+        "Marketing Agency,Coaching,Consulting,Author / Speaker,Real Estate,"
+        "SaaS / Tech,Creative Services,Recruiting & HR,Legal & Finance,"
+        "Fitness & Wellness,Education & Training,E-commerce,Founder / Startup"
+    )
+
     # Instantly unibox integration (reply tracking)
     INSTANTLY_API_KEY: str = ""  # base64 'uuid:secret' bearer token
     INSTANTLY_SYNC_INTERVAL_MINUTES: int = 30
@@ -46,6 +60,10 @@ class Settings(BaseSettings):
     BATCH_MAX_HOURS: int = 6         # deliver partial after this many hours regardless
     RETRY_SITEMAP_SECONDS: int = 180  # wait 3 min then re-fetch sitemaps mid-batch
     MAX_WAIT_ITERATIONS: int = 3     # break after 3 × 3min = 9min total waiting
+
+    # Bounce control — catch-all domains are the #1 silent-bounce risk
+    ACCEPT_CATCH_ALL: bool = False  # if False, verifier never accepts catch-all leads
+    EXPORT_CATCH_ALL: bool = False  # if False, exports/deliveries exclude catch-all leads
 
     # Backwards-compat
     DEFAULT_TARGET: int = 2000

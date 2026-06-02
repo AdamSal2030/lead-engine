@@ -369,6 +369,67 @@ async def trigger_unibox_sync():
     return {"ok": True, "newly_responded": count}
 
 
+@app.get("/admin/sync-bounces")
+@app.post("/admin/sync-bounces")
+async def admin_sync_bounces(pages: int = 20):
+    """Pull bounce events from Instantly and mark matching leads bounced=True.
+
+    Bounced leads are then automatically excluded from ALL exports/downloads.
+    Call this after your Instantly campaigns have run to scrub dead emails out
+    of the next download. `pages` controls how far back to scan (100/page)."""
+    if not settings.INSTANTLY_API_KEY:
+        return {"ok": False, "msg": "INSTANTLY_API_KEY not set in environment"}
+    from pipeline.bounce_sync import fetch_bounces
+    count = await fetch_bounces(limit_pages=pages)
+    return {"ok": True, "newly_bounced": count,
+            "msg": f"Marked {count} lead(s) as bounced. They're now excluded from all downloads."}
+
+
+@app.get("/admin/bounce-report", dependencies=[Depends(require_dash_login)])
+async def admin_bounce_report():
+    """Bounce + catch-all breakdown so you can see export health at a glance."""
+    from sqlalchemy import case
+    async with SessionLocal() as s:
+        total = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
+        bounced = (await s.execute(
+            select(func.count()).select_from(VerifiedLead).where(VerifiedLead.bounced == True)
+        )).scalar_one()
+        catch_all = (await s.execute(
+            select(func.count()).select_from(VerifiedLead).where(VerifiedLead.is_catch_all == True)
+        )).scalar_one()
+        # Exportable = not bounced and (catch-all excluded per setting)
+        from pipeline.delivery import _deliverable_filter
+        exportable = (await s.execute(
+            select(func.count()).select_from(VerifiedLead).where(*_deliverable_filter())
+        )).scalar_one()
+        # Bounce rate by source (top offenders)
+        from sqlalchemy import text as _t
+        rows = (await s.execute(_t(
+            "SELECT source, COUNT(*) AS total, "
+            "SUM(CASE WHEN bounced THEN 1 ELSE 0 END) AS bounced "
+            "FROM verified_leads GROUP BY source ORDER BY bounced DESC LIMIT 15"
+        ))).all()
+    by_source = [
+        {"source": r[0], "total": r[1], "bounced": r[2],
+         "bounce_rate": round((r[2] or 0) / r[1] * 100, 1) if r[1] else 0}
+        for r in rows
+    ]
+    return {
+        "ok": True,
+        "total_leads": total,
+        "bounced": bounced,
+        "bounce_rate_pct": round(bounced / total * 100, 1) if total else 0,
+        "catch_all": catch_all,
+        "exportable_now": exportable,
+        "excluded_from_export": total - exportable,
+        "settings": {
+            "ACCEPT_CATCH_ALL": settings.ACCEPT_CATCH_ALL,
+            "EXPORT_CATCH_ALL": settings.EXPORT_CATCH_ALL,
+        },
+        "by_source": by_source,
+    }
+
+
 @app.get("/unibox/stats")
 async def unibox_stats():
     """Reply stats per source."""
@@ -687,6 +748,52 @@ async def download_all():
     from pipeline.delivery import deliver_all_leads_csv
     path = await deliver_all_leads_csv()
     return FileResponse(path, filename=os.path.basename(path), media_type="text/csv")
+
+
+@app.get("/download-range", dependencies=[Depends(require_dash_login)])
+async def download_range(start: int = 1, end: int = 2000):
+    """Download a numbered slice of clean leads, e.g. start=8001&end=10000.
+
+    Numbering is over the deliverable set only (bounced + catch-all excluded),
+    oldest-first, so the same range always means the same leads. Lets you pull
+    'the next 2000' without re-downloading what you already have."""
+    if end < start:
+        raise HTTPException(400, "end must be >= start")
+    if end - start + 1 > 50000:
+        raise HTTPException(400, "range too large (max 50,000 rows per download)")
+    from pipeline.delivery import deliver_leads_range
+    path, rows, total = await deliver_leads_range(start, end)
+    if rows == 0:
+        raise HTTPException(404, f"No leads in range {start}-{end} (only {total} clean leads exist)")
+    return FileResponse(path, filename=os.path.basename(path), media_type="text/csv")
+
+
+@app.get("/admin/purge-bad")
+@app.post("/admin/purge-bad")
+async def admin_purge_bad(bounced: bool = True, catch_all: bool = True):
+    """Permanently DELETE bad leads from the DB so the portal only holds clean ones.
+
+    bounced=true   — delete leads Instantly confirmed bounced
+    catch_all=true — delete catch-all-domain leads (silent-bounce risk)
+
+    Run /admin/sync-bounces first so the bounced flags are current. Catch-all
+    leads can be purged immediately (no Instantly needed). Good leads untouched."""
+    from sqlalchemy import delete as sql_delete, or_ as _or
+    deleted = {}
+    async with SessionLocal() as s:
+        if bounced:
+            r = await s.execute(sql_delete(VerifiedLead).where(VerifiedLead.bounced == True))
+            deleted["bounced"] = r.rowcount
+        if catch_all:
+            r = await s.execute(sql_delete(VerifiedLead).where(VerifiedLead.is_catch_all == True))
+            deleted["catch_all"] = r.rowcount
+        await s.commit()
+        remaining = (await s.execute(select(func.count()).select_from(VerifiedLead))).scalar_one()
+    total_deleted = sum(deleted.values())
+    log.info(f"admin purge-bad: deleted {total_deleted} leads — {deleted}")
+    return {"ok": True, "deleted": deleted, "total_deleted": total_deleted,
+            "remaining_leads": remaining,
+            "msg": f"Deleted {total_deleted} bad lead(s). {remaining} clean leads remain in the portal."}
 
 
 @app.get("/download/{filename}", dependencies=[Depends(require_dash_login)])

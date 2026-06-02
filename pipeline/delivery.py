@@ -17,11 +17,31 @@ import logging
 from collections import defaultdict
 from email.message import EmailMessage
 from datetime import datetime
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from db import SessionLocal, VerifiedLead, Batch
 from config import settings
 
 log = logging.getLogger("delivery")
+
+
+def _deliverable_filter():
+    """SQLAlchemy filter for leads that are SAFE to export/deliver.
+
+    Excludes:
+      • bounced leads (confirmed dead by Instantly) — the #1 source of the
+        "download all gives bad results" complaint.
+      • catch-all leads when EXPORT_CATCH_ALL is off — catch-all domains accept
+        any address at SMTP time, so they're a major silent-bounce risk.
+
+    NULL-safe on purpose: older rows may have NULL in bounced / is_catch_all.
+    We treat NULL as "not bounced" / "not catch-all" so we never drop a clean
+    legacy lead, while still hard-excluding rows explicitly flagged True.
+    """
+    conds = [or_(VerifiedLead.bounced == False, VerifiedLead.bounced.is_(None))]
+    if not settings.EXPORT_CATCH_ALL:
+        conds.append(or_(VerifiedLead.is_catch_all == False,
+                         VerifiedLead.is_catch_all.is_(None)))
+    return conds
 
 # Column order for export.
 # Headers are whitespace-free so Instantly (and other tools) import without errors.
@@ -139,7 +159,9 @@ def _write_excel(path: str, leads: list[VerifiedLead]) -> None:
 async def deliver_all_leads_csv() -> str:
     """Write a CSV of ALL verified leads ever — useful for one-shot downloads."""
     async with SessionLocal() as s:
-        result = await s.execute(select(VerifiedLead).order_by(VerifiedLead.id))
+        result = await s.execute(
+            select(VerifiedLead).where(*_deliverable_filter()).order_by(VerifiedLead.id)
+        )
         leads = result.scalars().all()
 
     fname = f"all_leads_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
@@ -148,9 +170,45 @@ async def deliver_all_leads_csv() -> str:
     return path
 
 
+async def deliver_leads_range(start: int, end: int) -> tuple[str, int, int]:
+    """Write a CSV of clean leads numbered [start..end] (1-indexed, inclusive).
+
+    Numbering is over the DELIVERABLE set only (bounced + catch-all already
+    excluded), ordered oldest-first by id so row numbers stay stable across
+    downloads. Example: start=8001, end=10000 → the next 2000 good leads after
+    the first 8000 you already pulled.
+
+    Returns (csv_path, rows_written, total_available).
+    """
+    start = max(1, int(start))
+    end = max(start, int(end))
+    offset = start - 1
+    limit = end - start + 1
+
+    async with SessionLocal() as s:
+        total_available = (await s.execute(
+            select(func.count()).select_from(VerifiedLead).where(*_deliverable_filter())
+        )).scalar_one()
+        result = await s.execute(
+            select(VerifiedLead)
+            .where(*_deliverable_filter())
+            .order_by(VerifiedLead.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        leads = result.scalars().all()
+
+    fname = f"leads_{start}-{end}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.csv"
+    path = os.path.join(settings.DATA_DIR, fname)
+    _write_csv(path, leads)
+    return path, len(leads), total_available
+
+
 async def regenerate_csv_for_batch(batch_id: int) -> str | None:
     async with SessionLocal() as s:
-        result = await s.execute(select(VerifiedLead).where(VerifiedLead.batch_id == batch_id))
+        result = await s.execute(
+            select(VerifiedLead).where(VerifiedLead.batch_id == batch_id, *_deliverable_filter())
+        )
         leads = result.scalars().all()
         if not leads:
             return None
@@ -175,7 +233,7 @@ async def deliver_batch(batch_id: int) -> str:
     """Write CSV + Excel for batch, attempt email delivery. Return CSV path."""
     async with SessionLocal() as s:
         result = await s.execute(
-            select(VerifiedLead).where(VerifiedLead.batch_id == batch_id)
+            select(VerifiedLead).where(VerifiedLead.batch_id == batch_id, *_deliverable_filter())
         )
         leads = result.scalars().all()
 

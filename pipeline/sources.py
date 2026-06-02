@@ -161,12 +161,19 @@ VOYAGE_SITES = [
     "voyagenashville.com", "voyageportland.com", "voyageseattle.com",
     # New York
     "voyageny.com",
+    # Additional verified network cities (probed live, return real post-sitemaps)
+    "voyagenewjersey.com", "voyagetampa.com", "voyagelasvegas.com",
+    "voyageorlando.com", "voyagesanantonio.com", "voyagejacksonville.com",
+    "voyagesavannah.com", "voyagemilwaukee.com",
 ]
 
 # ShoutOut interview sites — same CMS/network as Voyage, direct slugs (no date prefix)
 SHOUTOUT_SITES = [
     "shoutoutla.com", "shoutoutatl.com", "shoutoutdfw.com",
     "shoutoutsocal.com", "shoutoutnorcal.com",
+    # Additional verified network cities (probed live, return real post-sitemaps)
+    "shoutoutmiami.com", "shoutoutcolorado.com", "shoutoutarizona.com",
+    "shoutouthtx.com",
 ]
 
 

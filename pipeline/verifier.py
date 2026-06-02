@@ -227,10 +227,13 @@ async def verify_lead(lead: dict) -> dict | None:
                     },
                 }
 
-            # Catch-all — ONLY accept if the founder's name is in the local part.
-            # "jane@acme.com" for Jane Smith → accept.
+            # Catch-all — ONLY accept if catch-all is enabled AND the founder's
+            # name is in the local part. Catch-all domains accept any address at
+            # SMTP time, so they're the #1 silent-bounce source. Gated off by
+            # default (settings.ACCEPT_CATCH_ALL=False).
+            # "jane@acme.com" for Jane Smith → accept (when enabled).
             # "founder@acme.com" or "jsmith@unknownco.com" → skip (too risky).
-            if result == "catch_all" and _name_in_local(email):
+            if result == "catch_all" and settings.ACCEPT_CATCH_ALL and _name_in_local(email):
                 return {
                     **lead,
                     "verified_email": email,
@@ -255,8 +258,9 @@ async def verify_lead(lead: dict) -> dict | None:
         score = res.get("overall_score") or 0
 
         if status in ("safe", "valid"):
-            # Non-catch-all: accept freely. Catch-all: require name in local.
-            if not is_catch or _name_in_local(email):
+            # Non-catch-all: accept freely.
+            # Catch-all: only when enabled AND name in local (else skip — bounce risk).
+            if not is_catch or (settings.ACCEPT_CATCH_ALL and _name_in_local(email)):
                 return {
                     **lead,
                     "verified_email": email,

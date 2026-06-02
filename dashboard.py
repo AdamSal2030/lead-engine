@@ -259,6 +259,21 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   .ctrl-pause:hover {{ background: rgba(255,230,107,0.1); box-shadow: 0 0 28px rgba(255,230,107,0.6); }}
   .ctrl-resume {{ border-color: #00ffa8; color: #00ffa8; }}
   .control-bar {{ margin-top: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
+  .range-box {{
+    margin-top: 20px; padding: 18px;
+    background: rgba(0,25,15,0.7);
+    border: 1px solid rgba(0,255,255,0.4);
+    box-shadow: 0 0 20px rgba(0,255,255,0.08);
+  }}
+  .range-title {{ font-size: 13px; color: #00ffff; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; text-shadow: 0 0 8px rgba(0,255,255,0.4); }}
+  .range-form {{ display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }}
+  .range-form label {{ font-size: 12px; color: #65a08a; text-transform: uppercase; letter-spacing: 1px; }}
+  .range-input {{
+    width: 120px; padding: 9px 12px; margin-left: 4px;
+    background: #000; border: 1px solid #00ffa8; color: #00ffa8;
+    font-family: inherit; font-size: 14px; font-weight: 700;
+  }}
+  .range-input:focus {{ outline: none; box-shadow: 0 0 12px rgba(0,255,168,0.5); }}
   .insights-grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr));
     gap: 14px; margin-top: 12px;
@@ -392,6 +407,19 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool, current_bat
   {'<form method="post" action="/control/resume" style="display:inline"><button class="ctrl-btn ctrl-resume" type="submit">▶ RESUME ENGINE</button></form>' if perpetual_paused else '<form method="post" action="/control/pause" style="display:inline"><button class="ctrl-btn ctrl-pause" type="submit">⏸ PAUSE ENGINE</button></form>'}
 </div>
 {'<div class="paused-banner">⏸ ENGINE PAUSED — no credits being burned · unibox + analysis still running</div>' if perpetual_paused else ''}
+
+<div class="range-box">
+  <div class="range-title">⬇ Download by range — grab the next batch without repeats</div>
+  <div class="muted" style="margin-bottom:10px">
+    Numbering is over your <b style="color:#00ffa8">{total:,}</b> clean leads (bounced &amp; catch-all already excluded), oldest first.
+    Already pulled the first 8,000? Enter <b>8001</b> → <b>10000</b> for the next 2,000.
+  </div>
+  <form method="get" action="{base}/download-range" class="range-form">
+    <label>From&nbsp;<input type="number" name="start" min="1" value="1" class="range-input"></label>
+    <label>To&nbsp;<input type="number" name="end" min="1" value="2000" class="range-input"></label>
+    <button type="submit" class="ctrl-btn">⬇ Download range</button>
+  </form>
+</div>
 
 {cb_html}
 

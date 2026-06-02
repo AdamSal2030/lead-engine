@@ -19,6 +19,13 @@ import urllib.parse
 
 log = logging.getLogger("orchestrator")
 
+# Skrapp niche allow-list (parsed once from settings). Empty set = no gating.
+# Skrapp only spends a credit when a lead's classified niche is in this set;
+# off-target leads still get free email extraction.
+SKRAPP_TARGET_NICHES: frozenset[str] = frozenset(
+    n.strip() for n in (settings.SKRAPP_TARGET_NICHES or "").split(",") if n.strip()
+)
+
 # Global state for run-in-progress (only one at a time)
 _run_lock = asyncio.Lock()
 _current_batch: dict | None = None
@@ -414,8 +421,12 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
                 if _company_slug and len(_company_slug) >= 3 and _company_slug not in {"the", "our", "inc", "llc", "ltd"}:
                     combined.append(f"{_company_slug}@{_domain}")
 
-            # L4: Skrapp finder
-            if need_skrapp and skrapp_finder.get_state().get("enabled"):
+            # L4: Skrapp finder — niche-gated so credits only go to the niches we want.
+            # off-target leads keep every free email we already found; they just
+            # never spend a Skrapp credit. Empty allow-list = fire on all niches.
+            _lead_niche = (parsed.get("niche") or "").strip()
+            _skrapp_niche_ok = (not SKRAPP_TARGET_NICHES) or (_lead_niche in SKRAPP_TARGET_NICHES)
+            if need_skrapp and _skrapp_niche_ok and skrapp_finder.get_state().get("enabled"):
                 if len(_words) >= 2 and _domain:
                     try:
                         skrapp_res = await skrapp_finder.find_email(_first, _last, _domain)
