@@ -456,7 +456,7 @@ async def admin_instantly_debug(ue_type: int = 3, limit: int = 5):
 
 @app.get("/admin/sync-bounces")
 @app.post("/admin/sync-bounces")
-async def admin_sync_bounces(pages: int = 20):
+async def admin_sync_bounces(pages: int = 6):
     """Pull bounce events from Instantly and mark matching leads bounced=True.
 
     Bounced leads are then automatically excluded from ALL exports/downloads.
