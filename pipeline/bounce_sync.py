@@ -57,13 +57,20 @@ def _bounced_address(it: dict) -> str | None:
     return None
 
 
+def _mask(addr: str) -> str:
+    local, _, dom = (addr or "").partition("@")
+    return f"{local[:2]}***@{dom}" if dom else (addr or "")
+
+
 async def _fetch_bounces_for_key(api_key: str, key_label: str, limit_pages: int,
-                                 seen_emails: set[str]) -> int:
+                                 seen_emails: set[str], stats: dict) -> int:
     """Pull bounces for a single Instantly key. Returns newly-marked count.
 
     The `ue_type` query param does NOT filter server-side, so we pull the
     recent feed unfiltered and keep only `ue_type == 3` (bounce) events,
     reading the bounced address from `lead`, matching client-side.
+
+    `stats` accumulates diagnostics: events_seen, matched, unmatched_samples.
     """
     newly_bounced = 0
     try:
@@ -95,6 +102,7 @@ async def _fetch_bounces_for_key(api_key: str, key_label: str, limit_pages: int,
                 for it in items:
                     if it.get("ue_type") != BOUNCE_UE_TYPE:
                         continue
+                    stats["events_seen"] += 1
                     addr = _bounced_address(it)
                     if addr:
                         bounce_targets.add(addr)
@@ -108,16 +116,24 @@ async def _fetch_bounces_for_key(api_key: str, key_label: str, limit_pages: int,
                             row = (await s.execute(
                                 select(VerifiedLead).where(
                                     VerifiedLead.email == email,
-                                    VerifiedLead.bounced == False,
                                 )
                             )).scalar_one_or_none()
-                            if row:
-                                await s.execute(
-                                    update(VerifiedLead)
-                                    .where(VerifiedLead.id == row.id)
-                                    .values(bounced=True, bounced_at=datetime.utcnow())
-                                )
-                                newly_bounced += 1
+                            if row is None:
+                                # Bounced in Instantly but not in our DB (e.g. uploaded
+                                # from an older export / already purged). Record sample.
+                                if len(stats["unmatched_samples"]) < 12:
+                                    stats["unmatched_samples"].append(_mask(email))
+                                stats["unmatched_in_db"] += 1
+                                continue
+                            if row.bounced:
+                                stats["already_marked"] += 1
+                                continue
+                            await s.execute(
+                                update(VerifiedLead)
+                                .where(VerifiedLead.id == row.id)
+                                .values(bounced=True, bounced_at=datetime.utcnow())
+                            )
+                            newly_bounced += 1
                         await s.commit()
 
                 cursor = data.get("next_starting_after") if isinstance(data, dict) else None
@@ -130,21 +146,37 @@ async def _fetch_bounces_for_key(api_key: str, key_label: str, limit_pages: int,
     return newly_bounced
 
 
+async def fetch_bounces_detailed(limit_pages: int = 5) -> dict:
+    """Like fetch_bounces but returns full diagnostics.
+
+    Returns {newly_bounced, events_seen, already_marked, unmatched_in_db,
+             unmatched_samples, accounts}.
+    """
+    keys = settings.instantly_keys()
+    stats = {"newly_bounced": 0, "events_seen": 0, "already_marked": 0,
+             "unmatched_in_db": 0, "unmatched_samples": [], "accounts": len(keys)}
+    if not keys:
+        return stats
+
+    seen_emails: set[str] = set()  # shared across keys so we never double-count
+    for i, key in enumerate(keys, start=1):
+        stats["newly_bounced"] += await _fetch_bounces_for_key(
+            key, f"key{i}", limit_pages, seen_emails, stats)
+    return stats
+
+
 async def fetch_bounces(limit_pages: int = 5) -> int:
     """Pull recent bounce events from ALL configured Instantly accounts and mark
-    matching leads in DB. Returns count of newly-marked-bounced leads.
-
-    Iterating every key means a stale/old key in one slot can't hide bounces that
-    live in another account — each key is queried independently.
-    """
+    matching leads in DB. Returns count of newly-marked-bounced leads."""
     keys = settings.instantly_keys()
     if not keys:
         return 0
 
-    newly_bounced = 0
-    seen_emails: set[str] = set()  # shared across keys so we never double-count
-    for i, key in enumerate(keys, start=1):
-        newly_bounced += await _fetch_bounces_for_key(key, f"key{i}", limit_pages, seen_emails)
+    stats = await fetch_bounces_detailed(limit_pages=limit_pages)
+    newly_bounced = stats["newly_bounced"]
+    log.info(f"Bounce sync diag: events_seen={stats['events_seen']} "
+             f"new={newly_bounced} already={stats['already_marked']} "
+             f"not_in_db={stats['unmatched_in_db']}")
 
     if newly_bounced:
         log.info(f"Bounce sync: marked {newly_bounced} lead(s) as bounced "

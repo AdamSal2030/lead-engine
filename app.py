@@ -464,11 +464,14 @@ async def admin_sync_bounces(pages: int = 6):
     of the next download. `pages` controls how far back to scan (100/page)."""
     if not settings.instantly_keys():
         return {"ok": False, "msg": "No INSTANTLY_API_KEY configured in environment"}
-    from pipeline.bounce_sync import fetch_bounces
-    count = await fetch_bounces(limit_pages=pages)
-    return {"ok": True, "newly_bounced": count, "accounts": len(settings.instantly_keys()),
-            "msg": f"Marked {count} lead(s) as bounced across {len(settings.instantly_keys())} "
-                   f"Instantly account(s). They're now excluded from all downloads."}
+    from pipeline.bounce_sync import fetch_bounces_detailed
+    stats = await fetch_bounces_detailed(limit_pages=pages)
+    return {"ok": True, **stats,
+            "msg": f"Marked {stats['newly_bounced']} lead(s) as bounced. "
+                   f"Saw {stats['events_seen']} bounce events; "
+                   f"{stats['already_marked']} already marked, "
+                   f"{stats['unmatched_in_db']} not in our DB. "
+                   f"Bounced leads are excluded from all downloads."}
 
 
 @app.get("/admin/bounce-report", dependencies=[Depends(require_dash_login)])
