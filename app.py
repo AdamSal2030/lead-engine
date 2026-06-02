@@ -369,6 +369,57 @@ async def trigger_unibox_sync():
     return {"ok": True, "newly_responded": count, "accounts": len(settings.instantly_keys())}
 
 
+@app.get("/admin/instantly-debug")
+async def admin_instantly_debug(ue_type: int = 3, limit: int = 5):
+    """TEMP diagnostic — introspect the raw Instantly /emails payload per account.
+
+    Shows HTTP status, item count, and (email-masked) field structure so we can
+    see WHERE the bounced lead's address actually lives. ue_type=3=bounce, 2=reply.
+    Masks addresses to local-initial + domain so no full PII is returned."""
+    import httpx as _httpx
+    keys = settings.instantly_keys()
+    if not keys:
+        return {"ok": False, "msg": "No INSTANTLY_API_KEY configured"}
+
+    def _mask(addr):
+        addr = (addr or "").strip()
+        if "@" not in addr:
+            return addr or None
+        local, _, dom = addr.partition("@")
+        return f"{local[:2]}***@{dom}"
+
+    out = []
+    for i, key in enumerate(keys, start=1):
+        acct = {"account": f"key{i}"}
+        try:
+            async with _httpx.AsyncClient(timeout=30,
+                    headers={"Authorization": f"Bearer {key}"}) as cli:
+                r = await cli.get("https://api.instantly.ai/api/v2/emails",
+                                  params={"limit": limit, "ue_type": ue_type})
+                acct["http_status"] = r.status_code
+                if r.status_code == 200:
+                    data = r.json()
+                    items = data.get("items", []) if isinstance(data, dict) else []
+                    acct["item_count_returned"] = len(items)
+                    acct["has_next_page"] = bool(data.get("next_starting_after"))
+                    samples = []
+                    for it in items[:limit]:
+                        samples.append({
+                            "ue_type": it.get("ue_type"),
+                            "to_address_email": _mask(it.get("to_address_email")),
+                            "from_address_email": _mask(it.get("from_address_email")),
+                            "subject": (it.get("subject") or "")[:60],
+                            "available_fields": sorted(it.keys()),
+                        })
+                    acct["samples"] = samples
+                else:
+                    acct["body"] = r.text[:300]
+        except Exception as e:
+            acct["error"] = str(e)[:200]
+        out.append(acct)
+    return {"ok": True, "ue_type_queried": ue_type, "accounts": out}
+
+
 @app.get("/admin/sync-bounces")
 @app.post("/admin/sync-bounces")
 async def admin_sync_bounces(pages: int = 20):
