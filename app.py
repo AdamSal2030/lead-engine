@@ -388,36 +388,68 @@ async def admin_instantly_debug(ue_type: int = 3, limit: int = 5):
         local, _, dom = addr.partition("@")
         return f"{local[:2]}***@{dom}"
 
+    def _mask_list(v):
+        if isinstance(v, list):
+            return [_mask(x) for x in v][:3]
+        return _mask(v) if isinstance(v, str) else v
+
+    BOUNCE_HINTS = ("mailer-daemon", "postmaster", "mail delivery", "delivery status",
+                    "undeliverable", "delivery has failed", "returned mail", "failure notice")
+
     out = []
     for i, key in enumerate(keys, start=1):
         acct = {"account": f"key{i}"}
         try:
-            async with _httpx.AsyncClient(timeout=30,
+            async with _httpx.AsyncClient(timeout=40,
                     headers={"Authorization": f"Bearer {key}"}) as cli:
-                r = await cli.get("https://api.instantly.ai/api/v2/emails",
-                                  params={"limit": limit, "ue_type": ue_type})
-                acct["http_status"] = r.status_code
-                if r.status_code == 200:
+                # Scan several pages to tally ue_type distribution + find likely bounces
+                ue_counts: dict = {}
+                likely_bounces = []
+                cursor = None
+                scanned = 0
+                for _pg in range(8):
+                    params = {"limit": 100}
+                    if cursor:
+                        params["starting_after"] = cursor
+                    r = await cli.get("https://api.instantly.ai/api/v2/emails", params=params)
+                    if r.status_code != 200:
+                        acct["http_status"] = r.status_code
+                        acct["body"] = r.text[:300]
+                        break
+                    acct["http_status"] = 200
                     data = r.json()
                     items = data.get("items", []) if isinstance(data, dict) else []
-                    acct["item_count_returned"] = len(items)
-                    acct["has_next_page"] = bool(data.get("next_starting_after"))
-                    samples = []
-                    for it in items[:limit]:
-                        samples.append({
-                            "ue_type": it.get("ue_type"),
-                            "to_address_email": _mask(it.get("to_address_email")),
-                            "from_address_email": _mask(it.get("from_address_email")),
-                            "subject": (it.get("subject") or "")[:60],
-                            "available_fields": sorted(it.keys()),
-                        })
-                    acct["samples"] = samples
-                else:
-                    acct["body"] = r.text[:300]
+                    if not items:
+                        break
+                    for it in items:
+                        scanned += 1
+                        ut = it.get("ue_type")
+                        ue_counts[str(ut)] = ue_counts.get(str(ut), 0) + 1
+                        frm = (it.get("from_address_email") or "").lower()
+                        subj = (it.get("subject") or "").lower()
+                        body_prev = (it.get("content_preview") or "").lower()
+                        if any(h in frm or h in subj or h in body_prev for h in BOUNCE_HINTS):
+                            if len(likely_bounces) < 6:
+                                likely_bounces.append({
+                                    "ue_type": ut,
+                                    "i_status": it.get("i_status"),
+                                    "from": _mask(it.get("from_address_email")),
+                                    "lead": _mask(it.get("lead")),
+                                    "to_list": _mask_list(it.get("to_address_email_list")),
+                                    "subject": (it.get("subject") or "")[:70],
+                                })
+                    cursor = data.get("next_starting_after")
+                    if not cursor or len(items) < 100:
+                        break
+                acct["scanned"] = scanned
+                acct["ue_type_distribution"] = ue_counts
+                acct["likely_bounces_found"] = len(likely_bounces)
+                acct["likely_bounce_samples"] = likely_bounces
         except Exception as e:
             acct["error"] = str(e)[:200]
         out.append(acct)
-    return {"ok": True, "ue_type_queried": ue_type, "accounts": out}
+    return {"ok": True, "note": "ue_type param appears non-filtering; tallied client-side",
+            "accounts": out}
 
 
 @app.get("/admin/sync-bounces")
