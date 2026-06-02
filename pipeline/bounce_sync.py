@@ -27,23 +27,16 @@ INSTANTLY_BASE = "https://api.instantly.ai/api/v2"
 BOUNCE_UE_TYPES = [3]
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {settings.INSTANTLY_API_KEY}"}
+def _headers(api_key: str) -> dict:
+    return {"Authorization": f"Bearer {api_key}"}
 
 
-async def fetch_bounces(limit_pages: int = 5) -> int:
-    """Pull recent bounce events from Instantly and mark leads in DB.
-
-    Returns count of newly-marked-bounced leads.
-    """
-    if not settings.INSTANTLY_API_KEY:
-        return 0
-
+async def _fetch_bounces_for_key(api_key: str, key_label: str, limit_pages: int,
+                                 seen_emails: set[str]) -> int:
+    """Pull bounces for a single Instantly key. Returns newly-marked count."""
     newly_bounced = 0
-    seen_emails: set[str] = set()
-
     try:
-        async with httpx.AsyncClient(timeout=30, headers=_headers()) as cli:
+        async with httpx.AsyncClient(timeout=30, headers=_headers(api_key)) as cli:
             for ue_type in BOUNCE_UE_TYPES:
                 cursor: str | None = None
                 pages = 0
@@ -55,7 +48,8 @@ async def fetch_bounces(limit_pages: int = 5) -> int:
 
                     r = await cli.get(f"{INSTANTLY_BASE}/emails", params=params)
                     if r.status_code != 200:
-                        log.warning(f"Instantly bounce fetch HTTP {r.status_code} (ue_type={ue_type})")
+                        log.warning(f"Instantly bounce fetch HTTP {r.status_code} "
+                                    f"(key={key_label}, ue_type={ue_type})")
                         break
 
                     data = r.json()
@@ -95,11 +89,28 @@ async def fetch_bounces(limit_pages: int = 5) -> int:
                     if not cursor or len(items) < 100:
                         break
                     pages += 1
-
-        if newly_bounced:
-            log.info(f"Bounce sync: marked {newly_bounced} lead(s) as bounced")
-
     except Exception:
-        log.exception("Bounce sync error")
+        log.exception(f"Bounce sync error (key={key_label})")
+    return newly_bounced
 
+
+async def fetch_bounces(limit_pages: int = 5) -> int:
+    """Pull recent bounce events from ALL configured Instantly accounts and mark
+    matching leads in DB. Returns count of newly-marked-bounced leads.
+
+    Iterating every key means a stale/old key in one slot can't hide bounces that
+    live in another account — each key is queried independently.
+    """
+    keys = settings.instantly_keys()
+    if not keys:
+        return 0
+
+    newly_bounced = 0
+    seen_emails: set[str] = set()  # shared across keys so we never double-count
+    for i, key in enumerate(keys, start=1):
+        newly_bounced += await _fetch_bounces_for_key(key, f"key{i}", limit_pages, seen_emails)
+
+    if newly_bounced:
+        log.info(f"Bounce sync: marked {newly_bounced} lead(s) as bounced "
+                 f"across {len(keys)} Instantly account(s)")
     return newly_bounced

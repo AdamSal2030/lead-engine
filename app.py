@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
         log.info("Perpetual loop scheduled.")
 
     # Unibox sync loop (Instantly reply + bounce tracking)
-    if settings.INSTANTLY_API_KEY:
+    if settings.instantly_keys():
         global _unibox_task
         from pipeline.unibox import unibox_loop
         _unibox_task = asyncio.create_task(unibox_loop())
@@ -362,11 +362,11 @@ async def run_intelligence(background_tasks: BackgroundTasks):
 @app.post("/unibox/sync")
 async def trigger_unibox_sync():
     """Manually trigger an immediate unibox sync."""
-    if not settings.INSTANTLY_API_KEY:
-        return {"ok": False, "msg": "INSTANTLY_API_KEY not set"}
+    if not settings.instantly_keys():
+        return {"ok": False, "msg": "No INSTANTLY_API_KEY configured"}
     from pipeline.unibox import fetch_replies
     count = await fetch_replies(limit_pages=10)
-    return {"ok": True, "newly_responded": count}
+    return {"ok": True, "newly_responded": count, "accounts": len(settings.instantly_keys())}
 
 
 @app.get("/admin/sync-bounces")
@@ -377,12 +377,13 @@ async def admin_sync_bounces(pages: int = 20):
     Bounced leads are then automatically excluded from ALL exports/downloads.
     Call this after your Instantly campaigns have run to scrub dead emails out
     of the next download. `pages` controls how far back to scan (100/page)."""
-    if not settings.INSTANTLY_API_KEY:
-        return {"ok": False, "msg": "INSTANTLY_API_KEY not set in environment"}
+    if not settings.instantly_keys():
+        return {"ok": False, "msg": "No INSTANTLY_API_KEY configured in environment"}
     from pipeline.bounce_sync import fetch_bounces
     count = await fetch_bounces(limit_pages=pages)
-    return {"ok": True, "newly_bounced": count,
-            "msg": f"Marked {count} lead(s) as bounced. They're now excluded from all downloads."}
+    return {"ok": True, "newly_bounced": count, "accounts": len(settings.instantly_keys()),
+            "msg": f"Marked {count} lead(s) as bounced across {len(settings.instantly_keys())} "
+                   f"Instantly account(s). They're now excluded from all downloads."}
 
 
 @app.get("/admin/bounce-report", dependencies=[Depends(require_dash_login)])

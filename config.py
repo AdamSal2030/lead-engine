@@ -32,9 +32,23 @@ class Settings(BaseSettings):
         "Fitness & Wellness,Education & Training,E-commerce,Founder / Startup"
     )
 
-    # Instantly unibox integration (reply tracking)
-    INSTANTLY_API_KEY: str = ""  # base64 'uuid:secret' bearer token
+    # Instantly unibox integration (reply + bounce tracking)
+    # Supports multiple Instantly accounts/workspaces — bounces & replies are
+    # pulled from ALL configured keys. Add more by setting INSTANTLY_API_KEY_2,
+    # _3, etc. in the environment.
+    INSTANTLY_API_KEY: str = ""    # base64 'uuid:secret' bearer token
+    INSTANTLY_API_KEY_2: str = ""  # second account/workspace key
+    INSTANTLY_API_KEY_3: str = ""  # third account/workspace key
     INSTANTLY_SYNC_INTERVAL_MINUTES: int = 30
+
+    def instantly_keys(self) -> list[str]:
+        """All configured Instantly bearer tokens, de-duped, blanks removed."""
+        seen: list[str] = []
+        for k in (self.INSTANTLY_API_KEY, self.INSTANTLY_API_KEY_2, self.INSTANTLY_API_KEY_3):
+            k = (k or "").strip()
+            if k and k not in seen:
+                seen.append(k)
+        return seen
 
     # Delivery (one of these is required for email delivery)
     SMTP_HOST: str = ""

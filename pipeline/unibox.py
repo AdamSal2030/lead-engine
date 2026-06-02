@@ -15,31 +15,25 @@ log = logging.getLogger("unibox")
 INSTANTLY_BASE = "https://api.instantly.ai/api/v2"
 
 
-def _headers() -> dict:
-    return {"Authorization": f"Bearer {settings.INSTANTLY_API_KEY}"}
+def _headers(api_key: str) -> dict:
+    return {"Authorization": f"Bearer {api_key}"}
 
 
-async def fetch_replies(limit_pages: int = 5) -> int:
-    """Fetch recent reply emails (ue_type=2) from Instantly unibox.
-    Match by from_address against verified_leads.email. Mark them responded.
-    Returns count of newly-marked-responded leads."""
-    if not settings.INSTANTLY_API_KEY:
-        return 0
-
+async def _fetch_replies_for_key(api_key: str, key_label: str, limit_pages: int,
+                                 seen_leads: set[str]) -> int:
+    """Fetch replies for a single Instantly key. Returns newly-responded count."""
     newly_responded = 0
     cursor: str | None = None
     pages = 0
-    seen_leads: set[str] = set()
-
     try:
-        async with httpx.AsyncClient(timeout=30, headers=_headers()) as cli:
+        async with httpx.AsyncClient(timeout=30, headers=_headers(api_key)) as cli:
             while pages < limit_pages:
                 params = {"limit": 100, "ue_type": 2}
                 if cursor:
                     params["starting_after"] = cursor
                 r = await cli.get(f"{INSTANTLY_BASE}/emails", params=params)
                 if r.status_code != 200:
-                    log.warning(f"Instantly emails fetch HTTP {r.status_code}")
+                    log.warning(f"Instantly emails fetch HTTP {r.status_code} (key={key_label})")
                     break
                 data = r.json()
                 items = data.get("items", []) if isinstance(data, dict) else []
@@ -79,21 +73,37 @@ async def fetch_replies(limit_pages: int = 5) -> int:
                 if not cursor or len(items) < 100:
                     break
                 pages += 1
-
-        if newly_responded:
-            log.info(f"Unibox sync: marked {newly_responded} new lead(s) as responded")
     except Exception as e:
-        log.exception(f"Unibox sync error: {e}")
+        log.exception(f"Unibox sync error (key={key_label}): {e}")
+    return newly_responded
 
+
+async def fetch_replies(limit_pages: int = 5) -> int:
+    """Fetch recent reply emails (ue_type=2) from ALL configured Instantly accounts.
+    Match by from_address against verified_leads.email. Mark them responded.
+    Returns count of newly-marked-responded leads."""
+    keys = settings.instantly_keys()
+    if not keys:
+        return 0
+
+    newly_responded = 0
+    seen_leads: set[str] = set()  # shared so a lead replying in two accounts counts once
+    for i, key in enumerate(keys, start=1):
+        newly_responded += await _fetch_replies_for_key(key, f"key{i}", limit_pages, seen_leads)
+
+    if newly_responded:
+        log.info(f"Unibox sync: marked {newly_responded} new lead(s) as responded "
+                 f"across {len(keys)} Instantly account(s)")
     return newly_responded
 
 
 async def unibox_loop():
     """Background task: poll unibox periodically for replies AND bounces."""
-    if not settings.INSTANTLY_API_KEY:
-        log.info("Unibox sync disabled (no INSTANTLY_API_KEY)")
+    if not settings.instantly_keys():
+        log.info("Unibox sync disabled (no INSTANTLY_API_KEY configured)")
         return
-    log.info(f"Unibox sync loop started (every {settings.INSTANTLY_SYNC_INTERVAL_MINUTES}m)")
+    log.info(f"Unibox sync loop started (every {settings.INSTANTLY_SYNC_INTERVAL_MINUTES}m, "
+             f"{len(settings.instantly_keys())} Instantly account(s))")
     await asyncio.sleep(60)
     while True:
         try:
