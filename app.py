@@ -402,19 +402,21 @@ async def admin_instantly_debug(ue_type: int = 3, limit: int = 5):
         try:
             async with _httpx.AsyncClient(timeout=40,
                     headers={"Authorization": f"Bearer {key}"}) as cli:
-                # Scan several pages to tally ue_type distribution + find likely bounces
+                # Scan a few pages (back off to respect 20 req/min limit) tallying
+                # ue_type distribution + capturing raw field structure of ue_type==3.
                 ue_counts: dict = {}
-                likely_bounces = []
+                bounce_samples = []
+                all_keys: set = set()
                 cursor = None
                 scanned = 0
-                for _pg in range(8):
+                for _pg in range(3):
                     params = {"limit": 100}
                     if cursor:
                         params["starting_after"] = cursor
                     r = await cli.get("https://api.instantly.ai/api/v2/emails", params=params)
                     if r.status_code != 200:
                         acct["http_status"] = r.status_code
-                        acct["body"] = r.text[:300]
+                        acct["body"] = r.text[:200]
                         break
                     acct["http_status"] = 200
                     data = r.json()
@@ -425,26 +427,26 @@ async def admin_instantly_debug(ue_type: int = 3, limit: int = 5):
                         scanned += 1
                         ut = it.get("ue_type")
                         ue_counts[str(ut)] = ue_counts.get(str(ut), 0) + 1
-                        frm = (it.get("from_address_email") or "").lower()
-                        subj = (it.get("subject") or "").lower()
-                        body_prev = (it.get("content_preview") or "").lower()
-                        if any(h in frm or h in subj or h in body_prev for h in BOUNCE_HINTS):
-                            if len(likely_bounces) < 6:
-                                likely_bounces.append({
-                                    "ue_type": ut,
-                                    "i_status": it.get("i_status"),
-                                    "from": _mask(it.get("from_address_email")),
-                                    "lead": _mask(it.get("lead")),
-                                    "to_list": _mask_list(it.get("to_address_email_list")),
-                                    "subject": (it.get("subject") or "")[:70],
-                                })
+                        # Capture raw structure of actual bounce events (ue_type==3)
+                        if ut == 3 and len(bounce_samples) < 6:
+                            all_keys.update(it.keys())
+                            bounce_samples.append({
+                                "i_status": it.get("i_status"),
+                                "from_address_email": _mask(it.get("from_address_email")),
+                                "to_address_email": _mask(it.get("to_address_email")),
+                                "lead": _mask(it.get("lead")),
+                                "to_address_email_list": _mask_list(it.get("to_address_email_list")),
+                                "subject": (it.get("subject") or "")[:70],
+                            })
                     cursor = data.get("next_starting_after")
                     if not cursor or len(items) < 100:
                         break
+                    await asyncio.sleep(3.5)  # stay under 20 req/min
                 acct["scanned"] = scanned
                 acct["ue_type_distribution"] = ue_counts
-                acct["likely_bounces_found"] = len(likely_bounces)
-                acct["likely_bounce_samples"] = likely_bounces
+                acct["bounce_event_count"] = len(bounce_samples)
+                acct["bounce_samples"] = bounce_samples
+                acct["item_field_names"] = sorted(all_keys)
         except Exception as e:
             acct["error"] = str(e)[:200]
         out.append(acct)
