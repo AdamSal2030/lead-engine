@@ -734,12 +734,13 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
         if isinstance(html, str):
             all_emails |= extract_emails(html)
 
-    # ALWAYS generate personal pattern emails (L3).
-    # We do this even when L2 already found emails — L2 often scrapes generic
-    # role addresses (info@, contact@) that fail verification on catch-all domains.
-    # Personal patterns (jane@domain, j.smith@domain …) rank before generics in
-    # rank_emails(), so the founder's real address is tried first.
-    if founder_name:
+    # Generate personal pattern emails (L3) — ONLY when guessing is enabled.
+    # Guessed patterns (jane@domain, j.smith@domain …) are the #1 bounce source:
+    # they look plausible and can even pass verification on catch-all domains,
+    # then bounce in the real campaign. With ALLOW_EMAIL_GUESSING off we return
+    # only addresses actually found on the page (real mailto:/text emails) and
+    # let the finder APIs (Skrapp) supply anything else.
+    if settings.ALLOW_EMAIL_GUESSING and founder_name:
         parts = founder_name.lower().replace(".", "").split()
         if len(parts) >= 2:
             first = re.sub(r"[^a-z]", "", parts[0])

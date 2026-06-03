@@ -9,7 +9,7 @@ import secrets
 from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, update
 
 from config import settings
 from db import init_db, SessionLocal, Batch, VerifiedLead
@@ -883,6 +883,78 @@ async def admin_purge_bad(bounced: bool = True, catch_all: bool = True):
     return {"ok": True, "deleted": deleted, "total_deleted": total_deleted,
             "remaining_leads": remaining,
             "msg": f"Deleted {total_deleted} bad lead(s). {remaining} clean leads remain in the portal."}
+
+
+@app.get("/admin/reverify")
+@app.post("/admin/reverify")
+async def admin_reverify(after_id: int = 0, limit: int = 400, remove_catch_all: bool = True):
+    """Re-check existing portal leads against MillionVerifier; flag bounce-prone ones.
+
+    This is the cleanup for emails already in the portal (e.g. guessed-pattern
+    addresses that slipped in before guessing was disabled). Walks verified_leads
+    by id (cursor = after_id) and re-verifies each non-bounced lead's email:
+
+      'ok'                     → keep (confirmed deliverable)
+      'invalid' / 'disposable' → mark bounced (will bounce)
+      'catch_all'              → mark bounced when remove_catch_all (silent-bounce risk)
+      'unknown' / MV error     → left untouched (never delete on uncertainty)
+
+    Flagged leads are excluded from every download immediately and are then
+    deletable via /admin/purge-bad. Re-runnable — loop with the returned
+    next_after_id until done=true. Each lead costs one MV credit.
+    """
+    from pipeline import mv_verifier as mv
+    if not mv.get_state().get("enabled"):
+        return {"ok": False,
+                "msg": "MillionVerifier not enabled (no MV_API_KEY or quota exhausted)."}
+
+    async with SessionLocal() as s:
+        rows = (await s.execute(
+            select(VerifiedLead.id, VerifiedLead.email)
+            .where(VerifiedLead.id > after_id, VerifiedLead.bounced == False)
+            .order_by(VerifiedLead.id)
+            .limit(limit)
+        )).all()
+
+    if not rows:
+        return {"ok": True, "done": True, "checked": 0, "marked_bad": 0,
+                "msg": "No more leads to check — cleanup complete."}
+
+    sem = asyncio.Semaphore(20)
+    by_result: dict = {}
+    bad_ids: list[int] = []
+
+    async def _check(lead_id: int, email: str):
+        async with sem:
+            res = await mv.verify(email)
+        result = (res or {}).get("result") if res else "error"
+        by_result[result] = by_result.get(result, 0) + 1
+        if result in ("invalid", "disposable"):
+            bad_ids.append(lead_id)
+        elif result == "catch_all" and remove_catch_all:
+            bad_ids.append(lead_id)
+
+    await asyncio.gather(*[_check(r[0], r[1]) for r in rows])
+
+    marked = 0
+    if bad_ids:
+        async with SessionLocal() as s:
+            r = await s.execute(
+                update(VerifiedLead).where(VerifiedLead.id.in_(bad_ids))
+                .values(bounced=True, bounced_at=datetime.utcnow())
+            )
+            marked = r.rowcount
+            await s.commit()
+
+    # Cursor = highest id processed this call (rows are ordered by id). Already-
+    # bounced rows below it are skipped by the WHERE filter on the next call.
+    next_after = rows[-1][0]
+    done = len(rows) < limit  # short page → reached the end of the table
+    return {"ok": True, "done": done, "checked": len(rows), "marked_bad": marked,
+            "by_result": by_result, "next_after_id": next_after,
+            "mv_quota_exhausted": mv.get_state().get("quota_exhausted"),
+            "msg": f"Checked {len(rows)} lead(s), flagged {marked} bounce-prone. "
+                   f"Loop with after_id={next_after} until done."}
 
 
 @app.get("/download/{filename}", dependencies=[Depends(require_dash_login)])

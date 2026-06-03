@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     ACCEPT_CATCH_ALL: bool = False  # if False, verifier never accepts catch-all leads
     EXPORT_CATCH_ALL: bool = False  # if False, exports/deliveries exclude catch-all leads
 
+    # Email guessing — when False the pipeline NEVER constructs guessed pattern
+    # emails (jane@, jsmith@, jane.smith@, founder@, info@ ...). Only confirmed
+    # addresses are used: article-body emails, emails actually scraped off the
+    # founder's website, and finder APIs (Skrapp / Hunter). Guessed patterns are
+    # the #1 bounce source, so this is OFF by default for deliverability.
+    ALLOW_EMAIL_GUESSING: bool = False
+
     # Backwards-compat
     DEFAULT_TARGET: int = 2000
     MAX_VERIFY_CONCURRENCY: int = 40     # MV handles 1000 RPM → 40 concurrent fine

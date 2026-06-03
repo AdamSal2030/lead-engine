@@ -409,8 +409,11 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
 
             # For directory sources with only a company name (no personal name),
             # generate decision-maker pattern emails as L3.6 — only if Hunter
-            # didn't find anything real for this domain.
-            if parsed.get("_is_company") and _domain and need_skrapp:
+            # didn't find anything real for this domain. GUESSES — gated off by
+            # default (settings.ALLOW_EMAIL_GUESSING) since founder@/ceo@/info@
+            # constructed addresses are a major bounce source.
+            if (settings.ALLOW_EMAIL_GUESSING and parsed.get("_is_company")
+                    and _domain and need_skrapp):
                 for dm_local in ["founder", "ceo", "owner", "hello", "contact",
                                  "info", "team", "admin", "hi"]:
                     combined.append(f"{dm_local}@{_domain}")
