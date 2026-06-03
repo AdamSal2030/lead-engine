@@ -19,6 +19,7 @@ When an open-model provider errors or returns nothing, we fall back to Claude
 The function returns the RAW text reply; callers parse JSON themselves (they
 already strip markdown fences and validate fields).
 """
+import asyncio
 import logging
 import httpx
 from config import settings
@@ -26,6 +27,22 @@ from config import settings
 log = logging.getLogger("llm")
 
 _anthropic_client = None
+
+# Lazily-built semaphore limiting concurrent open-model calls (CPU-box guardrail).
+_open_sem: asyncio.Semaphore | None = None
+_open_sem_n: int = -1
+
+
+def _open_semaphore() -> asyncio.Semaphore | None:
+    """Semaphore capping concurrent open-model calls, or None when unlimited."""
+    global _open_sem, _open_sem_n
+    n = int(getattr(settings, "LLM_MAX_CONCURRENCY", 0) or 0)
+    if n <= 0:
+        return None
+    if _open_sem is None or _open_sem_n != n:
+        _open_sem = asyncio.Semaphore(n)
+        _open_sem_n = n
+    return _open_sem
 
 
 def _get_anthropic():
@@ -131,14 +148,23 @@ async def chat_json(system: str, user: str, *, claude_model: str,
 
     # Open-model providers (ollama / openai-compatible)
     open_model = (settings.LLM_MODEL or "").strip()
+    # Per-call timeout: explicit arg wins, else the configurable LLM_TIMEOUT
+    # (lower it for a CPU box so slow calls bail to Claude fast).
+    eff_timeout = timeout if timeout != 60 else int(getattr(settings, "LLM_TIMEOUT", 60) or 60)
     if not open_model:
         log.warning(f"LLM_PROVIDER={prov} but LLM_MODEL is empty — using Claude")
     else:
+        sem = _open_semaphore()
         try:
-            if prov == "ollama":
-                out = await _ollama_chat(system, user, open_model, max_tokens, timeout)
-            else:  # "openai" / openai-compatible
-                out = await _openai_chat(system, user, open_model, max_tokens, timeout)
+            async def _do():
+                if prov == "ollama":
+                    return await _ollama_chat(system, user, open_model, max_tokens, eff_timeout)
+                return await _openai_chat(system, user, open_model, max_tokens, eff_timeout)
+            if sem is not None:
+                async with sem:
+                    out = await _do()
+            else:
+                out = await _do()
             if out:
                 return out
             log.debug(f"LLM provider '{prov}' returned empty output")

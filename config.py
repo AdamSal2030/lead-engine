@@ -113,8 +113,16 @@ class Settings(BaseSettings):
     # to the "claude" provider (open models have no per-call cost).
     LLM_PROVIDER: str = "claude"
     LLM_BASE_URL: str = ""              # e.g. http://1.2.3.4:11434  or  https://api.groq.com/openai/v1
-    LLM_MODEL: str = ""                 # e.g. qwen2.5:7b  or  llama-3.1-8b-instant
+    LLM_MODEL: str = ""                 # e.g. qwen2.5:3b  or  llama-3.1-8b-instant
     LLM_API_KEY: str = ""              # bearer token for hosted endpoints (blank for local Ollama)
+    # CPU-Ollama guardrails so a slow self-hosted box can't stall the pipeline:
+    #   LLM_TIMEOUT        — per-call seconds before giving up → Claude fallback.
+    #                        Lower it (e.g. 25) for a CPU box so slow calls bail fast.
+    #   LLM_MAX_CONCURRENCY — max simultaneous open-model calls (0 = unlimited).
+    #                        Set ~2 for a CPU box: it serializes anyway, and this
+    #                        stops 20 parallel requests from queueing into timeouts.
+    LLM_TIMEOUT: int = 60
+    LLM_MAX_CONCURRENCY: int = 0
 
     # Hunter.io — Layer 5 email finder (after Skrapp)
     HUNTER_API_KEY: str = ""
