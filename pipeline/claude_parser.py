@@ -50,14 +50,19 @@ def get_daily_usage() -> dict:
     }
 
 
-def _get_client():
-    if not settings.ANTHROPIC_API_KEY or not settings.CLAUDE_PARSE_ENABLED:
-        return None
-    global _client
-    if _client is None:
-        import anthropic
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
+def _parser_ready() -> bool:
+    """True when an LLM backend is configured for parsing.
+
+    - claude provider: needs ANTHROPIC_API_KEY (+ CLAUDE_PARSE_ENABLED).
+    - ollama/openai providers: need LLM_MODEL (base URL has a localhost default).
+    """
+    if not settings.CLAUDE_PARSE_ENABLED:
+        return False
+    from pipeline.llm import active_provider
+    prov = active_provider()
+    if prov == "claude":
+        return bool(settings.ANTHROPIC_API_KEY)
+    return bool((settings.LLM_MODEL or "").strip())
 
 
 SYSTEM_PROMPT = """\
@@ -88,23 +93,27 @@ async def parse_with_claude(url: str, clean_text: str):
       None  — Claude tried but found nothing (article isn't an interview) → claude_no_parse
       CAP_REACHED sentinel — daily cap hit, Claude never fired → mark as no_parse (retriable)
     """
-    client = _get_client()
-    if not client:
-        return CAP_REACHED  # no API key configured — keep URL retriable
+    if not _parser_ready():
+        return CAP_REACHED  # no LLM backend configured — keep URL retriable
 
-    if not _within_daily_limit():
+    from pipeline.llm import active_provider, chat_json
+    # The daily cap is a Claude spend rail — only enforce it on the Claude
+    # provider. Open models (ollama/openai) have no per-call cost, so they run
+    # uncapped.
+    if active_provider() == "claude" and not _within_daily_limit():
         log.info(f"Claude daily cap ({settings.CLAUDE_MAX_PER_DAY}) reached — skipping {url}")
         return CAP_REACHED  # cap hit — URL should stay as no_parse, NOT claude_no_parse
 
     try:
         _increment_call()
-        msg = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        raw = await chat_json(
+            SYSTEM_PROMPT, clean_text,
+            claude_model="claude-haiku-4-5-20251001",
             max_tokens=150,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": clean_text}],
         )
-        raw = msg.content[0].text.strip()
+        if not raw:
+            return None
+        raw = raw.strip()
 
         # Strip accidental markdown fences
         if "```" in raw:

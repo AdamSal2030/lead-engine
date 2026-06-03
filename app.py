@@ -670,6 +670,17 @@ async def debug_quick():
     except Exception as e:
         out["hunter"] = {"error": str(e)[:200]}
     try:
+        from pipeline.llm import active_provider
+        prov = active_provider()
+        out["llm"] = {
+            "provider": prov,
+            "model": (settings.LLM_MODEL or "claude-haiku-4-5") if prov != "claude" else "claude-haiku-4-5",
+            "base_url": settings.LLM_BASE_URL or ("(localhost:11434)" if prov == "ollama" else ""),
+            "claude_fallback": bool(settings.ANTHROPIC_API_KEY),
+        }
+    except Exception as e:
+        out["llm"] = {"error": str(e)[:200]}
+    try:
         from pipeline.reoon_pool import get_pool as _rpool
         p = _rpool()
         out["reoon_pool"] = {"keys": len(p)}

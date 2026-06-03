@@ -163,26 +163,30 @@ Rules:
 
 
 async def analyze_with_claude(metrics: dict) -> dict | None:
-    """Send metrics to Claude Sonnet and get strategic recommendations."""
-    from config import settings
-    if not settings.ANTHROPIC_API_KEY:
-        log.info("No ANTHROPIC_API_KEY — skipping Claude intelligence analysis")
-        return None
+    """Send metrics to the configured LLM and get strategic recommendations.
 
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    Uses settings.LLM_PROVIDER (Claude Sonnet by default; ollama/openai when set).
+    """
+    from config import settings
+    from pipeline.llm import active_provider, chat_json
+    # Need either an Anthropic key (claude) or an open-model config (ollama/openai)
+    if active_provider() == "claude" and not settings.ANTHROPIC_API_KEY:
+        log.info("No ANTHROPIC_API_KEY — skipping intelligence analysis")
+        return None
 
     formatted = _format_metrics_for_claude(metrics)
     prompt = INTELLIGENCE_PROMPT.format(metrics=formatted)
 
     try:
-        # Use Sonnet (not Haiku) for strategic reasoning — this runs once per day
-        msg = await client.messages.create(
-            model="claude-sonnet-4-6",
+        # Sonnet-class reasoning — runs once per day, so a larger token budget.
+        raw = await chat_json(
+            "", prompt,
+            claude_model="claude-sonnet-4-6",
             max_tokens=800,
-            messages=[{"role": "user", "content": prompt}],
         )
-        raw = msg.content[0].text.strip()
+        if not raw:
+            return None
+        raw = raw.strip()
         if "```" in raw:
             parts = raw.split("```")
             raw = parts[1][4:] if parts[1].startswith("json") else parts[1]

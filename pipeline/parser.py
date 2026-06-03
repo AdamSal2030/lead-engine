@@ -639,7 +639,7 @@ async def parse_article(url: str) -> dict | None:
         if not _is_interview_worthy(title_text, body_text, url):
             return None  # not an interview — mark no_parse (cheap, no Claude)
 
-        from pipeline.claude_parser import parse_with_claude, _get_client, CAP_REACHED
+        from pipeline.claude_parser import parse_with_claude, CAP_REACHED
 
         clean_text = _extract_text_for_claude(soup, title_text, body, url)
         claude_result = await parse_with_claude(url, clean_text)

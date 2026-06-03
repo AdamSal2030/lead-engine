@@ -102,6 +102,20 @@ class Settings(BaseSettings):
     CLAUDE_PARSE_ENABLED: bool = True   # use Claude as fallback when regex parser fails
     CLAUDE_MAX_PER_DAY: int = 5000      # daily cap on Haiku calls (~$0.30/day at 5000 calls)
 
+    # LLM provider — which backend powers article parsing + daily intelligence.
+    #   "claude" (default) → Anthropic API (uses ANTHROPIC_API_KEY)
+    #   "ollama"           → Ollama /api/chat at LLM_BASE_URL (default localhost:11434)
+    #   "openai"           → any OpenAI-compatible endpoint (Ollama OpenAI mode,
+    #                        Groq, Together, OpenRouter, DeepInfra, vLLM …);
+    #                        LLM_BASE_URL must include the version path (…/v1)
+    # Open-model calls fall back to Claude on error when ANTHROPIC_API_KEY is set,
+    # so yield never drops if the open model hiccups. The daily cap applies only
+    # to the "claude" provider (open models have no per-call cost).
+    LLM_PROVIDER: str = "claude"
+    LLM_BASE_URL: str = ""              # e.g. http://1.2.3.4:11434  or  https://api.groq.com/openai/v1
+    LLM_MODEL: str = ""                 # e.g. qwen2.5:7b  or  llama-3.1-8b-instant
+    LLM_API_KEY: str = ""              # bearer token for hosted endpoints (blank for local Ollama)
+
     # Hunter.io — Layer 5 email finder (after Skrapp)
     HUNTER_API_KEY: str = ""
     HUNTER_ENABLED: bool = True
