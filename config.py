@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # Public URL (Railway sets RAILWAY_PUBLIC_DOMAIN automatically)
     PUBLIC_BASE_URL: str = ""
 
+    # Residential proxy for blocked interview networks (Voyage / ShoutOut etc.).
+    # Format: http://user:pass@host:port  — set in Railway env, NEVER commit it.
+    # When empty, scraping behaves exactly as before (Wayback fallback). When
+    # set, only the blocked networks route through it (see pipeline/netutil.py).
+    PROXY_URL: str = ""
+
 
 settings = Settings()
 

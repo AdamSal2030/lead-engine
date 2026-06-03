@@ -146,8 +146,26 @@ _WAYBACK_ONLY_PATTERNS = ("voyagela.com", "voyagemia.com", "voyagedallas.com",
 
 async def fetch(url: str, timeout: int = 15) -> str | None:
     """Try direct fetch with UA rotation, then fall back to Wayback Machine on 403/block."""
-    # Fast path: known-blocked hosts → Wayback only (skip wasted direct attempts)
-    if any(h in url for h in CLOUDFLARE_BLOCKED_HOSTS + _WAYBACK_ONLY_PATTERNS):
+    from pipeline.netutil import proxy_client_kwargs
+    blocked = any(h in url for h in CLOUDFLARE_BLOCKED_HOSTS + _WAYBACK_ONLY_PATTERNS)
+    pkw = proxy_client_kwargs(url)
+
+    # Blocked host WITH a proxy → fetch LIVE through the residential proxy
+    # (preferred over stale Wayback). Falls through to Wayback if the proxy fails.
+    if blocked and pkw:
+        for ua in UA_LIST[:3]:
+            try:
+                h = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
+                async with httpx.AsyncClient(headers=h, timeout=timeout,
+                                             follow_redirects=True, **pkw) as cli:
+                    r = await cli.get(url)
+                    if r.status_code == 200 and len(r.text) > 200:
+                        return r.text
+            except Exception:
+                continue
+
+    # Blocked host (no proxy, or proxy attempt failed) → Wayback Machine
+    if blocked:
         try:
             wb_url = f"https://web.archive.org/web/2026/{url}"
             async with httpx.AsyncClient(

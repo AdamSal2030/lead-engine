@@ -19,11 +19,14 @@ UA_FALLBACKS = [
 
 
 async def fetch(url: str, timeout: int = 20, try_fallbacks: bool = False) -> str | None:
+    from pipeline.netutil import proxy_client_kwargs
+    pkw = proxy_client_kwargs(url)  # routes blocked networks through the proxy; else {}
     uas = UA_FALLBACKS if try_fallbacks else [UA]
     for ua in uas:
         try:
             headers = {"User-Agent": ua, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
-            async with httpx.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True) as cli:
+            async with httpx.AsyncClient(headers=headers, timeout=timeout,
+                                         follow_redirects=True, **pkw) as cli:
                 r = await cli.get(url)
                 if r.status_code == 200 and len(r.text) > 50:
                     return r.text

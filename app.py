@@ -908,10 +908,12 @@ async def admin_reverify(after_id: int = 0, limit: int = 400, remove_catch_all: 
         return {"ok": False,
                 "msg": "MillionVerifier not enabled (no MV_API_KEY or quota exhausted)."}
 
+    from sqlalchemy import or_ as _or
     async with SessionLocal() as s:
         rows = (await s.execute(
             select(VerifiedLead.id, VerifiedLead.email)
-            .where(VerifiedLead.id > after_id, VerifiedLead.bounced == False)
+            .where(VerifiedLead.id > after_id,
+                   _or(VerifiedLead.bounced == False, VerifiedLead.bounced.is_(None)))
             .order_by(VerifiedLead.id)
             .limit(limit)
         )).all()
