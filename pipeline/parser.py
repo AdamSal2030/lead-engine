@@ -768,23 +768,19 @@ async def find_emails(website: str, founder_name: str) -> list[str]:
                 if domain and "." in domain and len(domain) < 50:
                     if not any(b in domain for b in HOST_BUILDERS):
                         f1 = first[0]     # first initial
-                        l1 = last[0]      # last initial
-                        # 10 patterns — cover the most common corporate email formats
-                        all_emails.add(f"{first}@{domain}")           # jane@
-                        all_emails.add(f"{first}.{last}@{domain}")    # jane.smith@
-                        all_emails.add(f"{first}{last}@{domain}")     # janesmith@
+                        # NAME-BASED patterns only — these map to the real founder,
+                        # so when MillionVerifier SMTP-confirms one as deliverable
+                        # ("ok", non-catch-all) it's a genuine personal mailbox that
+                        # won't bounce. We deliberately DROP generic role guesses
+                        # (hello@/info@/contact@) — those are the catch-all/bounce
+                        # risk and add little value. Catch-all domains are rejected
+                        # by the verifier regardless (ACCEPT_CATCH_ALL=False).
+                        all_emails.add(f"{first}.{last}@{domain}")    # jane.smith@  (most common)
                         all_emails.add(f"{f1}{last}@{domain}")        # jsmith@
+                        all_emails.add(f"{first}@{domain}")           # jane@
+                        all_emails.add(f"{first}{last}@{domain}")     # janesmith@
                         all_emails.add(f"{f1}.{last}@{domain}")       # j.smith@
-                        all_emails.add(f"{last}@{domain}")            # smith@
-                        all_emails.add(f"{last}.{first}@{domain}")    # smith.jane@
                         all_emails.add(f"{first}_{last}@{domain}")    # jane_smith@
-                        all_emails.add(f"{first}.{l1}@{domain}")      # jane.s@
-                        all_emails.add(f"{last}{f1}@{domain}")        # smithj@
-                        all_emails.add(f"{first}-{last}@{domain}")    # jane-smith@
-                        # Generic fallbacks (lower rank — tried only if personal fail)
-                        all_emails.add(f"hello@{domain}")
-                        all_emails.add(f"info@{domain}")
-                        all_emails.add(f"hi@{domain}")
 
     all_emails = {e for e in all_emails if e.split("@")[0] not in JUNK_LOCALS}
     return sorted(all_emails)

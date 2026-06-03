@@ -26,11 +26,10 @@ class Settings(BaseSettings):
     # "Founder / Startup" is the unclassified catch-all — kept in by default so we
     # don't lose volume on leads our classifier couldn't label; drop it for stricter
     # targeting.
-    SKRAPP_TARGET_NICHES: str = (
-        "Marketing Agency,Coaching,Consulting,Author / Speaker,Real Estate,"
-        "SaaS / Tech,Creative Services,Recruiting & HR,Legal & Finance,"
-        "Fitness & Wellness,Education & Training,E-commerce,Founder / Startup"
-    )
+    # Empty = fire Skrapp on EVERY name+domain lead (max yield). Skrapp finds
+    # REAL emails (then re-verified by MV), so firing it widely lifts yield with
+    # low bounce risk. Set a comma-list of niche labels here to focus credits.
+    SKRAPP_TARGET_NICHES: str = ""
 
     # Instantly unibox integration (reply + bounce tracking)
     # Supports multiple Instantly accounts/workspaces — bounces & replies are
@@ -84,7 +83,7 @@ class Settings(BaseSettings):
     # addresses are used: article-body emails, emails actually scraped off the
     # founder's website, and finder APIs (Skrapp / Hunter). Guessed patterns are
     # the #1 bounce source, so this is OFF by default for deliverability.
-    ALLOW_EMAIL_GUESSING: bool = False
+    ALLOW_EMAIL_GUESSING: bool = True
 
     # Backwards-compat
     DEFAULT_TARGET: int = 2000

@@ -408,17 +408,13 @@ async def process_one_url(url: str, source: str, sem: asyncio.Semaphore) -> dict
                     pass
 
             # For directory sources with only a company name (no personal name),
-            # generate decision-maker pattern emails as L3.6 — only if Hunter
-            # didn't find anything real for this domain. GUESSES — gated off by
-            # default (settings.ALLOW_EMAIL_GUESSING) since founder@/ceo@/info@
-            # constructed addresses are a major bounce source.
+            # try ONLY the company-slug address (e.g. "Acme Digital" →
+            # acme@acmedigital.com) — often a real solo-founder inbox, and it's
+            # MV-verified before it can become a lead. We deliberately do NOT
+            # generate generic role guesses (founder@/ceo@/info@): those are the
+            # catch-all bounce source and get filtered by the verifier anyway.
             if (settings.ALLOW_EMAIL_GUESSING and parsed.get("_is_company")
                     and _domain and need_skrapp):
-                for dm_local in ["founder", "ceo", "owner", "hello", "contact",
-                                 "info", "team", "admin", "hi"]:
-                    combined.append(f"{dm_local}@{_domain}")
-                # Also try a slug derived from the company name itself.
-                # E.g. "Acme Digital" → "acme@acmedigital.com" — often real for solo founders.
                 _company_raw = (parsed.get("company") or parsed.get("name") or "").lower()
                 _company_slug = re.sub(r"[^a-z0-9]", "", _company_raw.split()[0]) if _company_raw.split() else ""
                 if _company_slug and len(_company_slug) >= 3 and _company_slug not in {"the", "our", "inc", "llc", "ltd"}:
