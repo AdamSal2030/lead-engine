@@ -141,18 +141,30 @@ _DROP_RESULTS = {"invalid", "disposable"}
 async def ingest_csv(content: bytes, source: str, verify: bool = True) -> dict:
     """Ingest a CSV upload. Returns stats dict."""
     rows, meta = parse_csv(content)
+    if not meta["email_column_found"]:
+        return {
+            "source": source, "total_rows": meta["total_rows"],
+            "email_column_found": False, "added": 0,
+            "error": ("No email column detected in the CSV. Headers seen: "
+                      + ", ".join(meta["headers"][:20])),
+        }
+    return await ingest_rows(rows, source=source, verify=verify)
+
+
+async def ingest_rows(rows: list[dict], source: str, verify: bool = True) -> dict:
+    """Ingest already-parsed lead rows (from CSV or a Skrapp list pull).
+
+    Each row dict: email, name, first_name, last_name, company, role,
+    website, industry, location. Dedupes, MV-verifies, niche-tags, inserts.
+    """
     stats = {
         "source": source,
-        "total_rows": meta["total_rows"],
-        "email_column_found": meta["email_column_found"],
+        "total_rows": len(rows),
+        "email_column_found": True,
         "no_email": 0, "bad_format": 0, "duplicates": 0,
         "verified_ok": 0, "dropped_unverifiable": 0, "catch_all_dropped": 0,
         "added": 0,
     }
-    if not meta["email_column_found"]:
-        stats["error"] = ("No email column detected in the CSV. Headers seen: "
-                          + ", ".join(meta["headers"][:20]))
-        return stats
 
     # Collapse to unique, well-formed emails (keep first occurrence's fields)
     seen_in_file: dict[str, dict] = {}

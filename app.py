@@ -927,8 +927,45 @@ async def upload_csv(file: UploadFile = File(...), verify: bool = True):
 
 @app.get("/last-import")
 async def last_import():
-    """Most recent CSV import result."""
+    """Most recent import result (CSV or Skrapp pull)."""
     return _last_import or {"msg": "No imports yet."}
+
+
+@app.get("/skrapp/account", dependencies=[Depends(require_dash_login)])
+async def skrapp_account():
+    """Skrapp account info — credits + any lists it exposes (helps find list IDs)."""
+    from pipeline.skrapp_lists import fetch_account
+    return await fetch_account()
+
+
+@app.post("/pull-skrapp", dependencies=[Depends(require_dash_login)])
+async def pull_skrapp(list_id: str, verify: bool = True, max_leads: int = 100000):
+    """Pull every lead from a Skrapp LIST via the official API, then ingest
+    (dedupe + MV re-verify + niche tag). One-button automation: run a Skrapp
+    Lead Search, Save-to-list, then fire this with the list_id."""
+    global _last_import
+    list_id = (list_id or "").strip()
+    if not list_id:
+        raise HTTPException(400, "Provide a Skrapp list_id (from the list's URL).")
+    if not settings.SKRAPP_API_KEY:
+        raise HTTPException(400, "SKRAPP_API_KEY is not set in the environment.")
+    from pipeline.skrapp_lists import fetch_list_leads
+    from pipeline.importer import ingest_rows
+    rows, meta = await fetch_list_leads(list_id, max_leads=max_leads)
+    if meta.get("error"):
+        return {"ok": False, "stage": "fetch", **meta}
+    if not rows:
+        return {"ok": True, "added": 0, "msg": "Skrapp list returned no leads.", **meta}
+    stats = await ingest_rows(rows, source=f"skrapp_list:{list_id[:30]}", verify=verify)
+    stats["filename"] = f"Skrapp list {list_id}"
+    stats["skrapp_fetched"] = meta["fetched"]
+    stats["skrapp_with_email"] = meta["with_email"]
+    stats["at"] = datetime.utcnow().isoformat()
+    _last_import = stats
+    async with SessionLocal() as s:
+        stats["portal_total"] = (await s.execute(
+            select(func.count()).select_from(VerifiedLead))).scalar_one()
+    return {"ok": True, **stats}
 
 
 @app.get("/admin/reverify")

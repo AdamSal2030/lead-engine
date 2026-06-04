@@ -124,27 +124,45 @@ btn.addEventListener('click', async () => {
   btn.innerHTML = orig; btn.disabled = false;
 });
 
-function renderResult(d) {
-  res.className = 'result show';
-  if (!d.ok && d.error) {
-    res.innerHTML = '<span style="color:#ff3a6e">' + d.error + '</span>'; return;
-  }
+function renderResult(d, target) {
+  target = target || res;
+  target.className = 'result show';
   if (d.error) {
-    res.innerHTML = '<span style="color:#ff3a6e">' + d.error + '</span>'; return;
+    target.innerHTML = '<span style="color:#ff3a6e">' + d.error + '</span>'; return;
   }
-  res.innerHTML =
-    '<div style="color:#00ffa8">✓ Imported <b>' + d.filename + '</b> — ' + d.added +
+  target.innerHTML =
+    '<div style="color:#00ffa8">✓ Imported <b>' + (d.filename||'leads') + '</b> — ' + d.added +
     ' new clean leads added. Portal now holds ' + (d.portal_total||'—') + '.</div>' +
     '<div class="grid">' +
-      cell(d.total_rows, 'rows in file') +
+      cell(d.total_rows, 'rows pulled') +
       cell(d.added, 'added (new + verified)') +
       cell(d.duplicates, 'already in portal') +
       cell(d.verified_ok, 'MV confirmed ok') +
       cell(d.catch_all_dropped, 'catch-all dropped') +
-      cell(d.dropped_unverifiable + d.bad_format + d.no_email, 'bad / undeliverable') +
+      cell((d.dropped_unverifiable||0) + (d.bad_format||0) + (d.no_email||0), 'bad / undeliverable') +
     '</div>';
 }
 function cell(v, l) { return '<div class="cell"><b>' + (v||0) + '</b><span>' + l + '</span></div>'; }
+
+const pullBtn = document.getElementById('pullBtn');
+const presult = document.getElementById('presult');
+pullBtn.addEventListener('click', async () => {
+  const listId = document.getElementById('listId').value.trim();
+  if (!listId) { presult.className='result show'; presult.innerHTML='<span style="color:#ff3a6e">Enter a Skrapp list ID first.</span>'; return; }
+  const verify = document.getElementById('pverify').checked;
+  pullBtn.disabled = true;
+  const orig = pullBtn.innerHTML;
+  pullBtn.innerHTML = '<span class="spin"></span> pulling…';
+  try {
+    const r = await fetch('/pull-skrapp?list_id=' + encodeURIComponent(listId) + '&verify=' + verify, { method:'POST', credentials:'same-origin' });
+    const d = await r.json();
+    renderResult(d, presult);
+  } catch (e) {
+    presult.className='result show';
+    presult.innerHTML = '<span style="color:#ff3a6e">Pull failed: ' + e + '</span>';
+  }
+  pullBtn.innerHTML = orig; pullBtn.disabled = false;
+});
 """
 
 
@@ -246,6 +264,18 @@ async def render_dashboard(loop_state: dict, perpetual_paused: bool,
         <button class="btn" id="uploadBtn" disabled>Import & Clean</button>
       </div>
       <div class="result" id="result"></div>
+    </div>
+
+    <div class="hero" style="border-color:#0aa">
+      <h3 style="color:#00ffa8">⚡ PULL FROM SKRAPP — ONE CLICK</h3>
+      <div class="muted" style="font-size:12px">In Skrapp: run a Lead Search → <b>Save to a list</b> (reveals verified emails). Then paste that list's ID here and hit Pull — the portal fetches the whole list via Skrapp's API and cleans it automatically. The list ID is the code in the list's URL.</div>
+      <div class="row">
+        <div class="fld"><label>Skrapp list ID</label><input type="text" id="listId" placeholder="e.g. 6634a1f0..." style="width:280px"></div>
+        <label class="chk"><input type="checkbox" id="pverify" checked> MV re-verify</label>
+        <button class="btn" id="pullBtn">⚡ Pull from Skrapp</button>
+        <a class="btn ghost" href="/skrapp/account" target="_blank">Check credits / lists</a>
+      </div>
+      <div class="result" id="presult"></div>
     </div>
 
     <h2>// download clean leads for instantly</h2>
