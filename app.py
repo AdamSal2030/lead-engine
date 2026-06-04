@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from contextlib import asynccontextmanager
 import secrets
-from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks, Depends, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import select, desc, func, update
@@ -31,6 +31,8 @@ _intelligence_task: asyncio.Task | None = None
 _perpetual_paused = False
 _last_exhausted_notice: datetime | None = None
 _loop_state = {"current_target": 0, "completed_batches": 0}
+# Most-recent CSV import result (for the dashboard panel)
+_last_import: dict | None = None
 
 
 async def perpetual_loop():
@@ -894,6 +896,39 @@ async def admin_purge_bad(bounced: bool = True, catch_all: bool = True):
     return {"ok": True, "deleted": deleted, "total_deleted": total_deleted,
             "remaining_leads": remaining,
             "msg": f"Deleted {total_deleted} bad lead(s). {remaining} clean leads remain in the portal."}
+
+
+@app.post("/upload-csv", dependencies=[Depends(require_dash_login)])
+async def upload_csv(file: UploadFile = File(...), verify: bool = True):
+    """Ingest a Skrapp / SuperSearch (or any) CSV export into the portal.
+
+    Dedupes against all existing leads, re-verifies each email with
+    MillionVerifier (keeps deliverable, drops bad, rejects catch-all), niche-tags
+    and stores them as clean Tier-A leads ready for range-download."""
+    global _last_import
+    if not file.filename or not file.filename.lower().endswith((".csv", ".tsv", ".txt")):
+        raise HTTPException(400, "Please upload a .csv file.")
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "The file is empty.")
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(400, "File too large (max 50MB). Split it into smaller files.")
+    source = "import:" + os.path.splitext(os.path.basename(file.filename))[0][:40]
+    from pipeline.importer import ingest_csv
+    stats = await ingest_csv(content, source=source, verify=verify)
+    stats["filename"] = file.filename
+    stats["at"] = datetime.utcnow().isoformat()
+    _last_import = stats
+    async with SessionLocal() as s:
+        stats["portal_total"] = (await s.execute(
+            select(func.count()).select_from(VerifiedLead))).scalar_one()
+    return {"ok": True, **stats}
+
+
+@app.get("/last-import")
+async def last_import():
+    """Most recent CSV import result."""
+    return _last_import or {"msg": "No imports yet."}
 
 
 @app.get("/admin/reverify")

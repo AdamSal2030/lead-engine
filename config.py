@@ -60,8 +60,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/leads.db"
     DATA_DIR: str = "./data"
 
-    # Perpetual loop — keeps running forever, one batch after another
-    PERPETUAL_ENABLED: bool = True
+    # Perpetual SCRAPER loop — DISABLED. The engine pivoted from scraping to
+    # CSV import (Skrapp Lead Search / Instantly SuperSearch → /upload-csv).
+    # Set True only to revive the legacy article-scraping pipeline.
+    PERPETUAL_ENABLED: bool = False
     BATCH_SIZE: int = 2000           # target 2000 verified leads per batch
     BATCH_SIZE_MAX: int = 5000       # ceiling
     BATCH_SIZE_GROWTH: int = 500     # +N each successful batch (until cap)
