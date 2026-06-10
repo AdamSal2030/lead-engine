@@ -82,11 +82,15 @@ async def run_enrichment(limit: int = 2000, after_id: int = 0,
     while processed < limit:
         chunk = min(batch_commit, limit - processed)
         async with SessionLocal() as s:
+            # Skip raw leads whose website we already have a verified lead for —
+            # avoids spending a Skrapp credit re-finding an email we already own.
+            already = select(VerifiedLead.website).where(VerifiedLead.website.isnot(None))
             rows = (await s.execute(
                 select(RawLead.id, RawLead.name, RawLead.website,
                        RawLead.company, RawLead.role)
                 .where(RawLead.id > last_id,
-                       RawLead.name.isnot(None), RawLead.website.isnot(None))
+                       RawLead.name.isnot(None), RawLead.website.isnot(None),
+                       RawLead.website.notin_(already))
                 .order_by(RawLead.id).limit(chunk)
             )).all()
         if not rows:
