@@ -73,6 +73,42 @@ async def _enrich_one(rl: dict, sem: asyncio.Semaphore) -> dict | None:
     }
 
 
+async def count_eligible() -> dict:
+    """DRY RUN — scan ALL raw leads and count how many are genuinely new
+    (domain not already owned) AND on-target niche. Spends ZERO credits."""
+    async with SessionLocal() as s:
+        vl_sites = (await s.execute(
+            select(VerifiedLead.website).where(VerifiedLead.website.isnot(None)))).scalars().all()
+        raw = (await s.execute(
+            select(RawLead.name, RawLead.website, RawLead.company, RawLead.role)
+            .where(RawLead.name.isnot(None), RawLead.website.isnot(None)))).all()
+    known = {_domain_of(w) for w in vl_sites if _domain_of(w)}
+    eligible = 0
+    seen = set()
+    by_niche: dict = {}
+    skipped_known = skipped_niche = no_domain = 0
+    for name, website, company, role in raw:
+        first, last = _split_name(name)
+        dom = _domain_of(website)
+        if not dom or not first or not last:
+            no_domain += 1
+            continue
+        if dom in known or dom in seen:
+            skipped_known += 1
+            continue
+        niche = classify(role, company, None, website)
+        if TARGET_NICHES and niche not in TARGET_NICHES:
+            skipped_niche += 1
+            continue
+        seen.add(dom)
+        eligible += 1
+        by_niche[niche] = by_niche.get(niche, 0) + 1
+    return {"total_raw": len(raw), "eligible_new_ontarget": eligible,
+            "skipped_already_owned": skipped_known, "skipped_off_niche": skipped_niche,
+            "skipped_no_name_or_domain": no_domain,
+            "by_niche": dict(sorted(by_niche.items(), key=lambda x: -x[1]))}
+
+
 async def run_enrichment(limit: int = 2000, after_id: int = 0,
                          batch_commit: int = 200) -> dict:
     """Process up to `limit` raw leads (id > after_id) through Skrapp + ingest.

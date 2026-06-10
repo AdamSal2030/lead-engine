@@ -965,6 +965,13 @@ async def enrich_status():
     return get_progress()
 
 
+@app.get("/enrich-dryrun")
+async def enrich_dryrun():
+    """Count new on-target founders we could enrich — spends ZERO credits."""
+    from pipeline.enrich import count_eligible
+    return await count_eligible()
+
+
 @app.post("/pull-skrapp", dependencies=[Depends(require_dash_login)])
 async def pull_skrapp(list_id: str, verify: bool = True, max_leads: int = 100000):
     """Pull every lead from a Skrapp LIST via the official API, then ingest
