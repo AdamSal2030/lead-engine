@@ -938,6 +938,33 @@ async def skrapp_account():
     return await fetch_account()
 
 
+_enrich_task: asyncio.Task | None = None
+
+
+@app.get("/enrich-skrapp")
+@app.post("/enrich-skrapp")
+async def enrich_skrapp(limit: int = 2000, after_id: int = 0):
+    """Fire the Skrapp enrichment: take our discovered founders (name+domain),
+    ask Skrapp for their REAL emails, MV-verify, dedupe, store. Runs in the
+    background — poll /enrich-status. Skrapp only charges for emails it finds."""
+    global _enrich_task
+    from pipeline.enrich import run_enrichment, get_progress
+    if not settings.SKRAPP_API_KEY:
+        raise HTTPException(400, "SKRAPP_API_KEY not set in environment.")
+    if _enrich_task and not _enrich_task.done():
+        return {"ok": False, "msg": "Enrichment already running.", **get_progress()}
+    _enrich_task = asyncio.create_task(run_enrichment(limit=limit, after_id=after_id))
+    return {"ok": True, "msg": f"Enrichment started for up to {limit} leads. Poll /enrich-status.",
+            "limit": limit, "after_id": after_id}
+
+
+@app.get("/enrich-status")
+async def enrich_status():
+    """Live progress of the Skrapp enrichment run."""
+    from pipeline.enrich import get_progress
+    return get_progress()
+
+
 @app.post("/pull-skrapp", dependencies=[Depends(require_dash_login)])
 async def pull_skrapp(list_id: str, verify: bool = True, max_leads: int = 100000):
     """Pull every lead from a Skrapp LIST via the official API, then ingest
