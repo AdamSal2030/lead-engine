@@ -15,12 +15,23 @@ from sqlalchemy import select, func
 from db import SessionLocal, RawLead, VerifiedLead
 from pipeline import finder as skrapp
 from pipeline.importer import ingest_rows
+from pipeline.niche import classify
 from config import settings
 
 log = logging.getLogger("enrich")
 
+# Target money niches — only spend credits on these. Empty = all niches.
+TARGET_NICHES = frozenset(
+    n.strip() for n in (settings.SKRAPP_TARGET_NICHES or "").split(",") if n.strip()
+) or frozenset({
+    "Marketing Agency", "Coaching", "Consulting", "Author / Speaker", "Real Estate",
+    "SaaS / Tech", "Creative Services", "Recruiting & HR", "Legal & Finance",
+    "Fitness & Wellness", "Education & Training", "E-commerce", "Founder / Startup",
+})
+
 _progress: dict = {"running": False, "processed": 0, "skrapp_hits": 0,
-                   "added": 0, "last_id": 0, "target": 0, "done": False, "msg": ""}
+                   "added": 0, "skipped_known": 0, "skipped_niche": 0,
+                   "last_id": 0, "target": 0, "done": False, "msg": ""}
 
 
 def get_progress() -> dict:
@@ -68,39 +79,61 @@ async def run_enrichment(limit: int = 2000, after_id: int = 0,
     Updates module-level _progress as it goes."""
     global _progress
     _progress = {"running": True, "processed": 0, "skrapp_hits": 0, "added": 0,
+                 "skipped_known": 0, "skipped_niche": 0,
                  "last_id": after_id, "target": limit, "done": False, "msg": "starting"}
 
     if not settings.SKRAPP_API_KEY:
         _progress.update(running=False, done=True, msg="No SKRAPP_API_KEY configured")
         return get_progress()
 
+    # Preload every domain we already have a verified lead for — robust
+    # (normalized) dedup so we never spend a credit on a company we already own.
+    async with SessionLocal() as s:
+        vl_sites = (await s.execute(
+            select(VerifiedLead.website).where(VerifiedLead.website.isnot(None)))).scalars().all()
+    known_domains = {_domain_of(w) for w in vl_sites if _domain_of(w)}
+
     sem = asyncio.Semaphore(settings.SKRAPP_CONCURRENCY)
     total_added = 0
     last_id = after_id
-    processed = 0
+    processed = 0   # = credit-eligible leads actually sent to Skrapp
 
+    SCAN = 500
     while processed < limit:
-        chunk = min(batch_commit, limit - processed)
         async with SessionLocal() as s:
-            # Skip raw leads whose website we already have a verified lead for —
-            # avoids spending a Skrapp credit re-finding an email we already own.
-            already = select(VerifiedLead.website).where(VerifiedLead.website.isnot(None))
             rows = (await s.execute(
                 select(RawLead.id, RawLead.name, RawLead.website,
                        RawLead.company, RawLead.role)
                 .where(RawLead.id > last_id,
-                       RawLead.name.isnot(None), RawLead.website.isnot(None),
-                       RawLead.website.notin_(already))
-                .order_by(RawLead.id).limit(chunk)
+                       RawLead.name.isnot(None), RawLead.website.isnot(None))
+                .order_by(RawLead.id).limit(SCAN)
             )).all()
         if not rows:
             break
+        last_id = rows[-1][0]
 
-        raws = [{"id": r[0], "name": r[1], "website": r[2],
-                 "company": r[3], "role": r[4]} for r in rows]
-        last_id = raws[-1]["id"]
+        # Filter in Python: skip already-known domains and off-target niches
+        eligible = []
+        for r in rows:
+            rid, name, website, company, role = r
+            dom = _domain_of(website)
+            if not dom or dom in known_domains:
+                _progress["skipped_known"] += 1
+                continue
+            niche = classify(role, company, None, website)
+            if TARGET_NICHES and niche not in TARGET_NICHES:
+                _progress["skipped_niche"] += 1
+                continue
+            known_domains.add(dom)  # dedupe within this run too
+            eligible.append({"id": rid, "name": name, "website": website,
+                             "company": company, "role": role})
+            if len(eligible) >= (limit - processed):
+                break
 
-        found = await asyncio.gather(*[_enrich_one(rl, sem) for rl in raws])
+        if not eligible:
+            continue  # whole scan window was dupes/off-niche; keep scanning
+
+        found = await asyncio.gather(*[_enrich_one(rl, sem) for rl in eligible])
         leads = [r for r in found if r]
         _progress["skrapp_hits"] += len(leads)
 
@@ -108,9 +141,11 @@ async def run_enrichment(limit: int = 2000, after_id: int = 0,
             stats = await ingest_rows(leads, source="skrapp_enrich", verify=True)
             total_added += stats.get("added", 0)
 
-        processed += len(raws)
+        processed += len(eligible)
         _progress.update(processed=processed, added=total_added, last_id=last_id,
-                         msg=f"{processed}/{limit} processed, {total_added} added")
+                         msg=f"{processed}/{limit} on-target processed, {total_added} new "
+                             f"(skipped {_progress['skipped_known']} known, "
+                             f"{_progress['skipped_niche']} off-niche)")
 
         if skrapp.get_state().get("quota_exhausted"):
             _progress["msg"] = "Skrapp quota exhausted — stopping"
