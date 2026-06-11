@@ -60,10 +60,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/leads.db"
     DATA_DIR: str = "./data"
 
-    # Perpetual SCRAPER loop — DISABLED. The engine pivoted from scraping to
-    # CSV import (Skrapp Lead Search / Instantly SuperSearch → /upload-csv).
-    # Set True only to revive the legacy article-scraping pipeline.
-    PERPETUAL_ENABLED: bool = False
+    # Perpetual loop ON — runs as a Skrapp-powered machine: discover founders
+    # (name+domain) → Skrapp finds the REAL email → MV-verify → clean lead.
+    # Burns credits + produces clean leads continuously (no guessing).
+    PERPETUAL_ENABLED: bool = True
     BATCH_SIZE: int = 2000           # target 2000 verified leads per batch
     BATCH_SIZE_MAX: int = 5000       # ceiling
     BATCH_SIZE_GROWTH: int = 500     # +N each successful batch (until cap)
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # addresses are used: article-body emails, emails actually scraped off the
     # founder's website, and finder APIs (Skrapp / Hunter). Guessed patterns are
     # the #1 bounce source, so this is OFF by default for deliverability.
-    ALLOW_EMAIL_GUESSING: bool = True
+    ALLOW_EMAIL_GUESSING: bool = False  # off — Skrapp supplies the real email (no bounce)
 
     # Backwards-compat
     DEFAULT_TARGET: int = 2000
