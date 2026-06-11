@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Skrapp email finder (Layer 4 — fires only when free extraction fails)
     SKRAPP_API_KEY: str = ""
     SKRAPP_ENABLED: bool = True  # auto-disables when quota exhausted; restart to retry
-    SKRAPP_DAILY_CAP: int = 3000  # hard per-day call ceiling (safety rail; 0 = unlimited)
+    SKRAPP_DAILY_CAP: int = 0  # 0 = unlimited (user opted to spend all credits)
 
     # Skrapp niche targeting — Skrapp only spends a credit when the lead's classified
     # niche is in this set. This is how we "search Skrapp for the niches we need":
