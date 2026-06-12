@@ -900,12 +900,12 @@ async def admin_purge_bad(bounced: bool = True, catch_all: bool = True):
 
 @app.post("/admin/upload-csv")
 @app.post("/upload-csv", dependencies=[Depends(require_dash_login)])
-async def upload_csv(file: UploadFile = File(...), verify: bool = True):
+async def upload_csv(file: UploadFile = File(...), verify: bool = True, strict: bool = True):
     """Ingest a Skrapp / SuperSearch (or any) CSV export into the portal.
 
-    Dedupes against all existing leads, re-verifies each email with
-    MillionVerifier (keeps deliverable, drops bad, rejects catch-all), niche-tags
-    and stores them as clean Tier-A leads ready for range-download."""
+    STRICT by default (strict=true): keeps only emails MillionVerifier confirms
+    'ok' AND Reoon confirms deliverable, hard-rejecting catch-all — the anti-bounce
+    gate. Dedupes against all existing leads and niche-tags the survivors."""
     global _last_import
     if not file.filename or not file.filename.lower().endswith((".csv", ".tsv", ".txt")):
         raise HTTPException(400, "Please upload a .csv file.")
@@ -916,7 +916,7 @@ async def upload_csv(file: UploadFile = File(...), verify: bool = True):
         raise HTTPException(400, "File too large (max 50MB). Split it into smaller files.")
     source = "import:" + os.path.splitext(os.path.basename(file.filename))[0][:40]
     from pipeline.importer import ingest_csv
-    stats = await ingest_csv(content, source=source, verify=verify)
+    stats = await ingest_csv(content, source=source, verify=verify, strict=strict)
     stats["filename"] = file.filename
     stats["at"] = datetime.utcnow().isoformat()
     _last_import = stats

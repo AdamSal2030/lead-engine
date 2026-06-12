@@ -138,7 +138,7 @@ _KEEP_RESULTS = {"ok", "unknown"}
 _DROP_RESULTS = {"invalid", "disposable"}
 
 
-async def ingest_csv(content: bytes, source: str, verify: bool = True) -> dict:
+async def ingest_csv(content: bytes, source: str, verify: bool = True, strict: bool = False) -> dict:
     """Ingest a CSV upload. Returns stats dict."""
     rows, meta = parse_csv(content)
     if not meta["email_column_found"]:
@@ -148,10 +148,10 @@ async def ingest_csv(content: bytes, source: str, verify: bool = True) -> dict:
             "error": ("No email column detected in the CSV. Headers seen: "
                       + ", ".join(meta["headers"][:20])),
         }
-    return await ingest_rows(rows, source=source, verify=verify)
+    return await ingest_rows(rows, source=source, verify=verify, strict=strict)
 
 
-async def ingest_rows(rows: list[dict], source: str, verify: bool = True) -> dict:
+async def ingest_rows(rows: list[dict], source: str, verify: bool = True, strict: bool = False) -> dict:
     """Ingest already-parsed lead rows (from CSV or a Skrapp list pull).
 
     Each row dict: email, name, first_name, last_name, company, role,
@@ -200,22 +200,42 @@ async def ingest_rows(rows: list[dict], source: str, verify: bool = True) -> dic
     sem = asyncio.Semaphore(settings.MAX_VERIFY_CONCURRENCY)
 
     async def check(email: str) -> tuple[str, str | None, bool]:
-        """Return (email, mv_result_or_None, keep)."""
+        """Return (email, mv_result_or_None, keep).
+
+        STRICT mode (the anti-bounce gate): keep ONLY MillionVerifier 'ok' AND
+        confirmed deliverable by Reoon (rejects catch-all that MV missed — the
+        #1 'invalid recipient' bounce source on personal-brand domains). Also
+        rejects when MV is down (no trusting unverified) and drops 'unknown'.
+        """
         if not verify:
             return email, None, True
         async with sem:
             res = await mv.verify(email)
         if res is None:
-            # MV down / quota — trust the source (it was pre-verified)
-            return email, None, True
+            # MV down/quota: in strict mode we do NOT trust the source.
+            return email, None, (not strict)
         result = (res.get("result") or "").lower()
-        # Catch-all detection: MV marks subresult/result
         if result in _DROP_RESULTS:
             return email, result, False
-        # MV result "catch_all" — reject unless explicitly allowed
         if result == "catch_all" or res.get("subresult") == "catch_all":
-            return email, "catch_all", settings.ACCEPT_CATCH_ALL
-        return email, result, result in _KEEP_RESULTS
+            return email, "catch_all", (settings.ACCEPT_CATCH_ALL and not strict)
+        if not strict:
+            return email, result, result in _KEEP_RESULTS
+        # --- STRICT: require MV 'ok' AND a clean Reoon second opinion ---
+        if result != "ok":
+            return email, result, False   # drop 'unknown' in strict mode
+        try:
+            from pipeline.verifier import verify_email as reoon_verify
+            r2 = await reoon_verify(email)
+        except Exception:
+            r2 = None
+        if r2 is None:
+            return email, "ok", True       # Reoon unavailable → trust MV 'ok'
+        if r2.get("is_catch_all"):
+            return email, "catch_all", False
+        if (r2.get("status") or "").lower() not in ("safe", "valid", "ok"):
+            return email, "reoon_reject", False
+        return email, "ok", True
 
     results = await asyncio.gather(*[check(e) for e in new_emails])
 
