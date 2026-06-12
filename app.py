@@ -898,6 +898,7 @@ async def admin_purge_bad(bounced: bool = True, catch_all: bool = True):
             "msg": f"Deleted {total_deleted} bad lead(s). {remaining} clean leads remain in the portal."}
 
 
+@app.post("/admin/upload-csv")
 @app.post("/upload-csv", dependencies=[Depends(require_dash_login)])
 async def upload_csv(file: UploadFile = File(...), verify: bool = True):
     """Ingest a Skrapp / SuperSearch (or any) CSV export into the portal.
