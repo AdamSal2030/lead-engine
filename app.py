@@ -972,6 +972,31 @@ async def enrich_dryrun():
     return await count_eligible()
 
 
+_miner_task: asyncio.Task | None = None
+
+
+@app.get("/mine")
+@app.post("/mine")
+async def mine(limit_domains: int = 2000, after: int = 0, dry_run: bool = False):
+    """Team-Page Miner: mine our domains' /about /team pages for decision-makers,
+    Skrapp-find their emails, MV-verify, store. dry_run=true projects the tuple
+    count with ZERO credits spent. Poll /mine-status."""
+    global _miner_task
+    from pipeline.miner import run_miner, get_progress
+    if _miner_task and not _miner_task.done():
+        return {"ok": False, "msg": "Miner already running.", **get_progress()}
+    _miner_task = asyncio.create_task(run_miner(limit_domains=limit_domains, after=after, dry_run=dry_run))
+    return {"ok": True, "msg": f"Miner started ({'DRY RUN' if dry_run else 'LIVE'}) on {limit_domains} domains. Poll /mine-status.",
+            "limit_domains": limit_domains, "dry_run": dry_run}
+
+
+@app.get("/mine-status")
+async def mine_status():
+    """Live progress of the Team-Page Miner."""
+    from pipeline.miner import get_progress
+    return get_progress()
+
+
 @app.post("/pull-skrapp", dependencies=[Depends(require_dash_login)])
 async def pull_skrapp(list_id: str, verify: bool = True, max_leads: int = 100000):
     """Pull every lead from a Skrapp LIST via the official API, then ingest
