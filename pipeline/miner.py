@@ -53,10 +53,15 @@ _BAD_NAME_TOKENS = {
 _miner_progress: dict = {"running": False, "domains_done": 0, "people_found": 0,
                          "skrapp_hits": 0, "added": 0, "target_domains": 0,
                          "done": False, "msg": ""}
+_stop_flag = {"stop": False}
 
 
 def get_progress() -> dict:
     return dict(_miner_progress)
+
+
+def request_stop():
+    _stop_flag["stop"] = True
 
 
 def _domain_of(website: str) -> str:
@@ -288,8 +293,16 @@ async def run_miner(limit_domains: int = 2000, after: int = 0, dry_run: bool = F
         _miner_progress.update(domains_done=domains_done, people_found=people_found,
                                skrapp_hits=skrapp_hits, added=total_added,
                                msg=f"{domains_done}/{len(domains)} domains, {people_found} new people, {total_added} leads")
+        if _stop_flag["stop"]:
+            _miner_progress["msg"] = "Stopped on request"
+            break
         if not dry_run and skrapp.get_state().get("quota_exhausted"):
             _miner_progress["msg"] = "Skrapp quota exhausted — stopping"
+            break
+        # Yield safety-guard: auto-stop if we're wasting credits (low lead yield)
+        if not dry_run and skrapp_hits >= 300 and (total_added / max(skrapp_hits, 1)) < 0.05:
+            _miner_progress["msg"] = (f"AUTO-STOPPED: yield {100*total_added/max(skrapp_hits,1):.1f}% "
+                                      f"too low ({total_added} leads / {skrapp_hits} credits) — not worth it")
             break
 
     async with SessionLocal() as s:

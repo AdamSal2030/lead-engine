@@ -997,6 +997,15 @@ async def mine_status():
     return get_progress()
 
 
+@app.get("/mine-stop")
+@app.post("/mine-stop")
+async def mine_stop():
+    """Request the miner to stop after the current chunk."""
+    from pipeline.miner import request_stop, get_progress
+    request_stop()
+    return {"ok": True, "msg": "Stop requested.", **get_progress()}
+
+
 @app.post("/pull-skrapp", dependencies=[Depends(require_dash_login)])
 async def pull_skrapp(list_id: str, verify: bool = True, max_leads: int = 100000):
     """Pull every lead from a Skrapp LIST via the official API, then ingest
