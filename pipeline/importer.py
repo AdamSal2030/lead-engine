@@ -19,13 +19,32 @@ import re
 import asyncio
 import logging
 from datetime import datetime
-from sqlalchemy import select
+from sqlalchemy import select, delete as sql_delete
 from db import SessionLocal, VerifiedLead
 from pipeline import mv_verifier as mv
 from pipeline.niche import classify
 from config import settings
 
 log = logging.getLogger("importer")
+
+# ── Whole-portal strict re-verification state ──────────────────────────────
+_reverify_state: dict = {
+    "running": False, "done": False,
+    "total": 0, "checked": 0,
+    "kept": 0, "deleted": 0,
+    "catch_all_deleted": 0, "reoon_deleted": 0,
+    "mv_fail_deleted": 0, "mv_down_skipped": 0,
+    "started_at": None, "finished_at": None, "error": None,
+}
+
+def get_reverify_progress() -> dict:
+    return dict(_reverify_state)
+
+def reverify_stop_flag() -> bool:
+    return _reverify_state.get("_stop", False)
+
+def request_reverify_stop():
+    _reverify_state["_stop"] = True
 
 # Flexible header matching — normalised (lowercase, alnum only) → field.
 EMAIL_COLS = {"email", "emailaddress", "workemail", "email1", "professionalemail",
@@ -291,3 +310,124 @@ async def ingest_rows(rows: list[dict], source: str, verify: bool = True, strict
                 stats["added"] = added
     log.info(f"CSV import [{source}]: {stats}")
     return stats
+
+
+async def reverify_portal_strict(batch_size: int = 150) -> dict:
+    """Re-verify EVERY lead in the portal with the same strict gate used on imports:
+    MV 'ok' + Reoon confirms deliverable + hard catch-all reject.
+    Leads that fail are DELETED (not just flagged) — this permanently cleans the portal.
+    Runs as a background task; poll get_reverify_progress() for live stats.
+    """
+    global _reverify_state
+    _reverify_state.update({
+        "running": True, "done": False,
+        "total": 0, "checked": 0,
+        "kept": 0, "deleted": 0,
+        "catch_all_deleted": 0, "reoon_deleted": 0,
+        "mv_fail_deleted": 0, "mv_down_skipped": 0,
+        "started_at": datetime.utcnow().isoformat(),
+        "finished_at": None, "error": None, "_stop": False,
+    })
+
+    try:
+        from sqlalchemy import func
+        async with SessionLocal() as s:
+            total = (await s.execute(
+                select(func.count()).select_from(VerifiedLead)
+            )).scalar_one()
+        _reverify_state["total"] = total
+
+        sem = asyncio.Semaphore(settings.MAX_VERIFY_CONCURRENCY)
+        cursor_id = 0
+
+        while True:
+            if reverify_stop_flag():
+                log.info("reverify_portal_strict: stop requested")
+                break
+
+            async with SessionLocal() as s:
+                rows = (await s.execute(
+                    select(VerifiedLead.id, VerifiedLead.email)
+                    .where(VerifiedLead.id > cursor_id)
+                    .order_by(VerifiedLead.id)
+                    .limit(batch_size)
+                )).all()
+
+            if not rows:
+                break
+
+            async def _strict_check(lead_id: int, email: str) -> tuple[int, str]:
+                """Returns (lead_id, verdict) where verdict ∈ kept/catch_all/mv_fail/reoon/mv_down"""
+                async with sem:
+                    res = await mv.verify(email)
+                if res is None:
+                    return lead_id, "mv_down"
+                result = (res.get("result") or "").lower()
+                if result in ("invalid", "disposable"):
+                    return lead_id, "mv_fail"
+                if result == "catch_all" or res.get("subresult") == "catch_all":
+                    return lead_id, "catch_all"
+                if result != "ok":
+                    return lead_id, "mv_fail"
+                # MV ok → cross-check with Reoon
+                try:
+                    from pipeline.verifier import verify_email as reoon_verify
+                    r2 = await reoon_verify(email)
+                except Exception:
+                    r2 = None
+                if r2 is None:
+                    return lead_id, "kept"  # Reoon down → trust MV ok
+                if r2.get("is_catch_all"):
+                    return lead_id, "catch_all"
+                if (r2.get("status") or "").lower() not in ("safe", "valid", "ok"):
+                    return lead_id, "reoon"
+                return lead_id, "kept"
+
+            verdicts = await asyncio.gather(*[_strict_check(r[0], r[1]) for r in rows])
+
+            delete_ids = [lid for lid, v in verdicts if v != "kept" and v != "mv_down"]
+            kept_n = sum(1 for _, v in verdicts if v == "kept")
+            mv_down_n = sum(1 for _, v in verdicts if v == "mv_down")
+            catch_all_n = sum(1 for _, v in verdicts if v == "catch_all")
+            reoon_n = sum(1 for _, v in verdicts if v == "reoon")
+            mv_fail_n = sum(1 for _, v in verdicts if v == "mv_fail")
+
+            if delete_ids:
+                async with SessionLocal() as s:
+                    await s.execute(
+                        sql_delete(VerifiedLead).where(VerifiedLead.id.in_(delete_ids))
+                    )
+                    await s.commit()
+
+            _reverify_state["checked"] += len(rows)
+            _reverify_state["kept"] += kept_n
+            _reverify_state["deleted"] += len(delete_ids)
+            _reverify_state["catch_all_deleted"] += catch_all_n
+            _reverify_state["reoon_deleted"] += reoon_n
+            _reverify_state["mv_fail_deleted"] += mv_fail_n
+            _reverify_state["mv_down_skipped"] += mv_down_n
+
+            cursor_id = rows[-1][0]
+            log.info(
+                f"reverify_portal [cursor={cursor_id}]: "
+                f"checked={_reverify_state['checked']}/{total} "
+                f"deleted={_reverify_state['deleted']} kept={_reverify_state['kept']}"
+            )
+
+            if len(rows) < batch_size:
+                break
+
+        _reverify_state["done"] = True
+        _reverify_state["finished_at"] = datetime.utcnow().isoformat()
+        log.info(
+            f"reverify_portal_strict COMPLETE: "
+            f"checked={_reverify_state['checked']} deleted={_reverify_state['deleted']} "
+            f"kept={_reverify_state['kept']}"
+        )
+    except Exception as e:
+        _reverify_state["error"] = str(e)[:300]
+        log.exception("reverify_portal_strict failed")
+    finally:
+        _reverify_state["running"] = False
+
+    return get_reverify_progress()

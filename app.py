@@ -1111,6 +1111,47 @@ async def admin_reverify(after_id: int = 0, limit: int = 400, remove_catch_all: 
                    f"Loop with after_id={next_after} until done."}
 
 
+_reverify_strict_task: asyncio.Task | None = None
+
+
+@app.get("/admin/reverify-strict")
+@app.post("/admin/reverify-strict")
+async def admin_reverify_strict(batch_size: int = 150):
+    """Strict double-verification audit on EVERY lead in the portal.
+
+    Runs in the background. Each lead is checked:
+      - MillionVerifier must return 'ok'  (not unknown / invalid / catch_all)
+      - Reoon must confirm 'safe'/'valid' AND not catch_all
+    Leads that fail are PERMANENTLY DELETED from the portal.
+    Poll /admin/reverify-strict/status for live progress.
+    ~19k leads ≈ 20–30 min (limited by MV 1000 RPM).
+    """
+    global _reverify_strict_task
+    from pipeline.importer import reverify_portal_strict, get_reverify_progress, _reverify_state
+    if _reverify_strict_task and not _reverify_strict_task.done():
+        return {"ok": False, "msg": "Already running.", **get_reverify_progress()}
+    _reverify_state["_stop"] = False
+    _reverify_strict_task = asyncio.create_task(reverify_portal_strict(batch_size=batch_size))
+    return {"ok": True, "msg": f"Strict portal re-verification started (batch_size={batch_size}). "
+                               "Poll /admin/reverify-strict/status for progress."}
+
+
+@app.get("/admin/reverify-strict/status")
+async def admin_reverify_strict_status():
+    """Live progress of the strict portal re-verification."""
+    from pipeline.importer import get_reverify_progress
+    return get_reverify_progress()
+
+
+@app.post("/admin/reverify-strict/stop")
+@app.get("/admin/reverify-strict/stop")
+async def admin_reverify_strict_stop():
+    """Ask the strict re-verification to stop after the current batch."""
+    from pipeline.importer import request_reverify_stop, get_reverify_progress
+    request_reverify_stop()
+    return {"ok": True, "msg": "Stop requested.", **get_reverify_progress()}
+
+
 @app.get("/download/{filename}", dependencies=[Depends(require_dash_login)])
 async def download(filename: str):
     """Open: filenames are unguessable (batch_id + timestamp), no auth required."""
