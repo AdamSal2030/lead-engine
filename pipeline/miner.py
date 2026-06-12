@@ -243,7 +243,9 @@ async def run_miner(limit_domains: int = 2000, after: int = 0, dry_run: bool = F
     domains = domains[after: after + limit_domains]
     existing = await _existing_people()
     from pipeline.llm import active_provider
-    use_llm = active_provider() != "claude" or bool(settings.ANTHROPIC_API_KEY)
+    # LLM fallback uses ONLY an open-model provider (your Ollama) — never Claude.
+    # Regex/structured does the bulk; when Ollama isn't wired, miner is regex-only.
+    use_llm = active_provider() in ("ollama", "openai")
 
     sem = asyncio.Semaphore(fetch_concurrency)
     skrapp_sem = asyncio.Semaphore(settings.SKRAPP_CONCURRENCY)
